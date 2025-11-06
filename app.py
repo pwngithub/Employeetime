@@ -17,7 +17,34 @@ DATA_DIR.mkdir(exist_ok=True)
 
 EMPLOYEE_FILE = DATA_DIR / "employees.csv"
 TASKS_FILE = DATA_DIR / "tasks.csv"
-LEADS_FILE = DATA_DIR / "sales_leads.csv"
+TASK_TYPES_FILE = DATA_DIR / "task_types.csv"  # NEW: task library
+
+
+# -------------------------------
+# COLUMNS / CONSTANTS
+# -------------------------------
+EMPLOYEE_COLUMNS = ["employee_id", "name", "role", "hourly_rate"]
+
+TASK_TYPE_COLUMNS = [
+    "task_type_id",
+    "task_name",
+    "category",
+]
+
+TASK_COLUMNS = [
+    "task_id",
+    "date",
+    "employee_id",
+    "employee_name",
+    "task_type_id",
+    "task_name",
+    "task_category",
+    "task_description",
+    "start_time",
+    "end_time",
+    "duration_minutes",
+    "cost",
+]
 
 
 # -------------------------------
@@ -50,19 +77,447 @@ def combine_date_time(d: date, t: time) -> datetime:
     )
 
 
+def create_default_task_types() -> pd.DataFrame:
+    """Default tasks including the sales pipeline steps."""
+    defaults = [
+        # Sales pipeline
+        {"task_type_id": "TT_SALES_1", "task_name": "Sales – First Contact Reply", "category": "Sales"},
+        {"task_type_id": "TT_SALES_2", "task_name": "Sales – Schedule Site Survey", "category": "Sales"},
+        {"task_type_id": "TT_SALES_3", "task_name": "Sales – Record Site Survey Results", "category": "Sales"},
+        {"task_type_id": "TT_SALES_4", "task_name": "Sales – Schedule Prep", "category": "Sales"},
+        {"task_type_id": "TT_SALES_5", "task_name": "Sales – Schedule Install", "category": "Sales"},
+        # Generic ops examples (you can delete or rename in the UI)
+        {"task_type_id": "TT_OPS_1", "task_name": "Construction – Pull Fiber", "category": "Construction"},
+        {"task_type_id": "TT_OPS_2", "task_name": "Construction – Lash Fiber", "category": "Construction"},
+    ]
+    return pd.DataFrame(defaults, columns=TASK_TYPE_COLUMNS)
+
+
 # -------------------------------
-# INITIAL DATA LOAD
+# DATA LOADERS (CACHED)
 # -------------------------------
-EMPLOYEE_COLUMNS = ["employee_id", "name", "role", "hourly_rate"]
-TASK_COLUMNS = [
-    "task_id",
-    "date",
-    "employee_id",
-    "employee_name",
-    "task_category",
-    "task_description",
-    "start_time",
-    "end_time",
+@st.cache_data
+def get_employees():
+    return load_csv(EMPLOYEE_FILE, EMPLOYEE_COLUMNS)
+
+
+@st.cache_data
+def get_task_types():
+    if TASK_TYPES_FILE.exists():
+        df = load_csv(TASK_TYPES_FILE, TASK_TYPE_COLUMNS)
+        if df.empty:
+            df = create_default_task_types()
+            save_csv(df, TASK_TYPES_FILE)
+        return df
+    else:
+        df = create_default_task_types()
+        save_csv(df, TASK_TYPES_FILE)
+        return df
+
+
+@st.cache_data
+def get_tasks():
+    return load_csv(TASKS_FILE, TASK_COLUMNS)
+
+
+def refresh_employees_cache():
+    get_employees.clear()
+
+
+def refresh_task_types_cache():
+    get_task_types.clear()
+
+
+def refresh_tasks_cache():
+    get_tasks.clear()
+
+
+# -------------------------------
+# SIDEBAR NAV
+# -------------------------------
+st.sidebar.title("⏱️ Task Tracker")
+page = st.sidebar.radio(
+    "Go to",
+    [
+        "1️⃣ Employees",
+        "2️⃣ Task List",
+        "3️⃣ Employee Tasks",
+        "4️⃣ Reports",
+    ]
+)
+
+
+# -------------------------------
+# PAGE 1: EMPLOYEES
+# -------------------------------
+if page == "1️⃣ Employees":
+    st.title("Employees")
+
+    employees = get_employees()
+
+    st.subheader("Add / Update Employee")
+
+    with st.form("employee_form", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            name = st.text_input("Name")
+            role = st.text_input("Role", value="Technician")
+        with col2:
+            hourly_rate = st.number_input("Hourly Rate ($/hour)", min_value=0.0, step=0.5, value=25.0)
+            employee_id = st.text_input("Employee ID (optional, auto if blank)").strip()
+
+        submitted = st.form_submit_button("Save Employee")
+
+        if submitted:
+            if not name:
+                st.warning("Name is required.")
+            else:
+                if not employee_id:
+                    # Auto-generate a simple ID
+                    employee_id = f"E{int(datetime.now().timestamp())}"
+
+                # Check if employee exists -> update
+                mask = employees["employee_id"] == employee_id
+                new_row = {
+                    "employee_id": employee_id,
+                    "name": name,
+                    "role": role,
+                    "hourly_rate": hourly_rate,
+                }
+
+                if mask.any():
+                    employees.loc[mask, :] = new_row
+                    st.success(f"Updated employee {name}.")
+                else:
+                    employees = pd.concat([employees, pd.DataFrame([new_row])], ignore_index=True)
+                    st.success(f"Added employee {name}.")
+
+                save_csv(employees, EMPLOYEE_FILE)
+                refresh_employees_cache()
+
+    st.subheader("Current Employees")
+    if employees.empty:
+        st.info("No employees yet. Add one above.")
+    else:
+        st.dataframe(employees, use_container_width=True)
+
+
+# -------------------------------
+# PAGE 2: TASK LIST (LIBRARY)
+# -------------------------------
+elif page == "2️⃣ Task List":
+    st.title("Task List (Task Library)")
+
+    task_types = get_task_types()
+
+    st.subheader("Add / Update Task Type")
+
+    with st.form("task_type_form", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            task_name = st.text_input("Task Name (what the employee selects)", placeholder="e.g., Sales – First Contact Reply")
+        with c2:
+            category = st.text_input("Category", placeholder="e.g., Sales, Construction, Admin")
+
+        task_type_id = st.text_input(
+            "Task Type ID (optional, auto if blank)",
+            help="Internal ID; leave blank and it will be auto-generated.",
+        ).strip()
+
+        submitted = st.form_submit_button("Save Task Type")
+
+        if submitted:
+            if not task_name:
+                st.warning("Task Name is required.")
+            else:
+                if not task_type_id:
+                    task_type_id = f"TT_{int(datetime.now().timestamp())}"
+
+                mask = task_types["task_type_id"] == task_type_id
+                new_row = {
+                    "task_type_id": task_type_id,
+                    "task_name": task_name,
+                    "category": category or "General",
+                }
+
+                if mask.any():
+                    task_types.loc[mask, :] = new_row
+                    st.success(f"Updated task type {task_name}.")
+                else:
+                    task_types = pd.concat([task_types, pd.DataFrame([new_row])], ignore_index=True)
+                    st.success(f"Added task type {task_name}.")
+
+                save_csv(task_types, TASK_TYPES_FILE)
+                refresh_task_types_cache()
+
+    st.subheader("Existing Task Types")
+    task_types = get_task_types()
+
+    if task_types.empty:
+        st.info("No task types yet. Add some above.")
+    else:
+        st.dataframe(task_types, use_container_width=True)
+
+        st.caption("Tip: Add your sales pipeline steps here so they appear in the dropdown on the Employee Tasks page.")
+
+
+# -------------------------------
+# PAGE 3: EMPLOYEE TASKS (TIMER + DROPDOWN)
+# -------------------------------
+elif page == "3️⃣ Employee Tasks":
+    st.title("Employee Tasks (Timer)")
+
+    employees = get_employees()
+    task_types = get_task_types()
+    tasks = get_tasks()
+
+    # Track active task in this browser session
+    if "active_task_id" not in st.session_state:
+        st.session_state["active_task_id"] = None
+
+    if employees.empty:
+        st.warning("You need to add employees first on the 'Employees' page.")
+    elif task_types.empty:
+        st.warning("You need to add task types first on the 'Task List' page.")
+    else:
+        st.subheader("Start a Task")
+
+        with st.form("start_task_form", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+
+            with c1:
+                employee_name = st.selectbox(
+                    "Employee",
+                    options=employees["name"].tolist()
+                )
+
+                task_choice = st.selectbox(
+                    "Task (from list)",
+                    options=task_types["task_name"].tolist(),
+                    help="Includes your sales pipeline steps and any other tasks you've added.",
+                )
+
+            with c2:
+                task_description = st.text_area(
+                    "Optional Notes / Description",
+                    height=100,
+                    placeholder="Extra details about this specific task instance..."
+                )
+
+            start_submitted = st.form_submit_button("▶️ Start Task")
+
+            if start_submitted:
+                if st.session_state["active_task_id"] is not None:
+                    st.error("A task is already running in this session. Finish it before starting a new one.")
+                else:
+                    employee_row = employees[employees["name"] == employee_name].iloc[0]
+                    employee_id = employee_row["employee_id"]
+
+                    task_type_row = task_types[task_types["task_name"] == task_choice].iloc[0]
+                    task_type_id = task_type_row["task_type_id"]
+                    task_category = task_type_row["category"]
+
+                    start_dt = datetime.now()
+                    task_id = f"T{int(start_dt.timestamp())}"
+
+                    new_task = {
+                        "task_id": task_id,
+                        "date": start_dt.date().isoformat(),
+                        "employee_id": employee_id,
+                        "employee_name": employee_name,
+                        "task_type_id": task_type_id,
+                        "task_name": task_choice,
+                        "task_category": task_category,
+                        "task_description": task_description,
+                        "start_time": start_dt.isoformat(),
+                        "end_time": None,
+                        "duration_minutes": None,
+                        "cost": None,
+                    }
+
+                    tasks = pd.concat([tasks, pd.DataFrame([new_task])], ignore_index=True)
+                    save_csv(tasks, TASKS_FILE)
+                    refresh_tasks_cache()
+
+                    st.session_state["active_task_id"] = task_id
+                    st.success(f"Started task '{task_choice}' for {employee_name} at {start_dt.strftime('%Y-%m-%d %H:%M:%S')}")
+
+        # ----------------- Active Task Panel -----------------
+        st.subheader("Active Task (This Browser Session)")
+
+        active_task_id = st.session_state.get("active_task_id", None)
+        tasks = get_tasks()  # reload fresh
+
+        if active_task_id is None:
+            st.info("No active task for this session.")
+        else:
+            active_row = tasks[tasks["task_id"] == active_task_id]
+            if active_row.empty:
+                st.warning("Active task not found (may have been deleted). Clearing active task state.")
+                st.session_state["active_task_id"] = None
+            else:
+                row = active_row.iloc[0]
+                try:
+                    start_dt = datetime.fromisoformat(str(row["start_time"]))
+                except Exception:
+                    start_dt = None
+
+                if start_dt is not None:
+                    elapsed = datetime.now() - start_dt
+                    elapsed_minutes = elapsed.total_seconds() / 60
+                    elapsed_str = str(elapsed).split(".")[0]  # strip microseconds
+                else:
+                    elapsed_str = "Unknown"
+                    elapsed_minutes = None
+
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.write(f"**Employee:** {row['employee_name']}")
+                    st.write(f"**Task:** {row['task_name']}")
+                    st.write(f"**Category:** {row['task_category']}")
+                with c2:
+                    st.write(f"**Started:** {row['start_time']}")
+                    st.write(f"**Elapsed:** {elapsed_str}")
+                with c3:
+                    st.write("**Notes:**")
+                    st.write(row["task_description"])
+
+                finish_clicked = st.button("⏹️ Finish Task")
+
+                if finish_clicked:
+                    end_dt = datetime.now()
+
+                    # Get employee hourly rate
+                    emp_df = get_employees()
+                    emp_row = emp_df[emp_df["employee_id"] == row["employee_id"]]
+                    if emp_row.empty:
+                        hourly_rate = 0.0
+                    else:
+                        hourly_rate = float(emp_row.iloc[0]["hourly_rate"])
+
+                    if start_dt is not None:
+                        duration_minutes = (end_dt - start_dt).total_seconds() / 60
+                        duration_hours = duration_minutes / 60
+                    else:
+                        duration_minutes = None
+                        duration_hours = 0
+
+                    cost = round(duration_hours * hourly_rate, 2) if duration_minutes is not None else None
+
+                    # Update row in tasks df
+                    tasks.loc[tasks["task_id"] == active_task_id, "end_time"] = end_dt.isoformat()
+                    tasks.loc[tasks["task_id"] == active_task_id, "duration_minutes"] = duration_minutes
+                    tasks.loc[tasks["task_id"] == active_task_id, "cost"] = cost
+
+                    save_csv(tasks, TASKS_FILE)
+                    refresh_tasks_cache()
+
+                    st.session_state["active_task_id"] = None
+                    st.success(
+                        f"Task finished. Duration: {duration_minutes:.1f} minutes, Cost: ${cost:.2f}"
+                        if duration_minutes is not None
+                        else "Task finished."
+                    )
+
+        # ----------------- Task Log -----------------
+        st.subheader("Task Log")
+
+        tasks = get_tasks()
+        if tasks.empty:
+            st.info("No tasks logged yet.")
+        else:
+            f1, f2, f3, f4 = st.columns(4)
+            with f1:
+                emp_filter = st.selectbox(
+                    "Filter by Employee",
+                    options=["All"] + employees["name"].tolist(),
+                    index=0
+                )
+            with f2:
+                task_filter = st.selectbox(
+                    "Filter by Task Name",
+                    options=["All"] + sorted(task_types["task_name"].tolist()),
+                    index=0
+                )
+            with f3:
+                cat_filter = st.text_input("Filter by Category (contains)")
+            with f4:
+                show_in_progress_only = st.checkbox("Show only in-progress tasks", value=False)
+
+            df_display = tasks.copy()
+
+            if emp_filter != "All":
+                df_display = df_display[df_display["employee_name"] == emp_filter]
+
+            if task_filter != "All":
+                df_display = df_display[df_display["task_name"] == task_filter]
+
+            if cat_filter:
+                df_display = df_display[df_display["task_category"].str.contains(cat_filter, case=False, na=False)]
+
+            if show_in_progress_only:
+                df_display = df_display[df_display["end_time"].isna() | (df_display["end_time"] == "")]
+
+            # Sort newest first
+            df_display = df_display.sort_values(["date", "start_time"], ascending=False)
+
+            st.dataframe(df_display, use_container_width=True)
+
+
+# -------------------------------
+# PAGE 4: REPORTS
+# -------------------------------
+elif page == "4️⃣ Reports":
+    st.title("Reports")
+
+    employees = get_employees()
+    tasks = get_tasks()
+
+    # ---------- Employee Task Reports ----------
+    st.header("Employee Task Cost & Time")
+
+    if tasks.empty:
+        st.info("No tasks logged yet.")
+    else:
+        df = tasks.copy()
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+
+        # Only completed tasks have an end_time and duration
+        df_completed = df[df["duration_minutes"].notna()]
+
+        if df_completed.empty:
+            st.info("No completed tasks yet to report on.")
+        else:
+            c1, c2 = st.columns(2)
+            with c1:
+                start_date = st.date_input("Start Date", value=df_completed["date"].min().date())
+            with c2:
+                end_date = st.date_input("End Date", value=df_completed["date"].max().date())
+
+            mask = (df_completed["date"] >= pd.to_datetime(start_date)) & (df_completed["date"] <= pd.to_datetime(end_date))
+            df_filtered = df_completed[mask]
+
+            st.subheader("Summary by Employee")
+            by_emp = df_filtered.groupby("employee_name").agg(
+                total_minutes=("duration_minutes", "sum"),
+                total_hours=("duration_minutes", lambda x: x.sum() / 60),
+                total_cost=("cost", "sum"),
+                task_count=("task_id", "count")
+            ).reset_index()
+
+            st.dataframe(by_emp, use_container_width=True)
+
+            st.subheader("Summary by Task Name")
+            by_task = df_filtered.groupby(["task_name", "task_category"]).agg(
+                total_minutes=("duration_minutes", "sum"),
+                total_hours=("duration_minutes", lambda x: x.sum() / 60),
+                total_cost=("cost", "sum"),
+                task_count=("task_id", "count")
+            ).reset_index()
+
+            st.dataframe(by_task, use_container_width=True)
+
+            st.caption("Sales pipeline steps are just tasks with category 'Sales', so they'll show up here like everything else.")
     "duration_minutes",
     "cost"
 ]
