@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from pathlib import Path
-from datetime import datetime, date, time
+from datetime import datetime
 
 # -------------------------------
 # CONFIGURATION
@@ -332,7 +332,7 @@ elif page == "3️⃣ Admin":
             if st.button("Logout", key="admin_logout"):
                 st.session_state["admin_authenticated"] = False
                 st.session_state["admin_username"] = None
-                st.experimental_rerun()
+                st.rerun()
 
             if st.session_state["admin_authenticated"]:
                 section = st.radio(
@@ -387,7 +387,7 @@ elif page == "3️⃣ Admin":
                                 save_csv(employees, EMPLOYEE_FILE)
                                 refresh_employees_cache()
 
-                    st.subheader("Edit Existing Employee Hourly Rate")
+                    st.subheader("Edit Existing Employee")
                     employees = get_employees()
                     if employees.empty:
                         st.info("No employees to edit.")
@@ -403,6 +403,11 @@ elif page == "3️⃣ Admin":
                         current_role = emp_row["role"]
 
                         with st.form("edit_employee_form"):
+                            new_name = st.text_input(
+                                "Name",
+                                value=selected_name,
+                                key="edit_name_input"
+                            )
                             new_role = st.text_input(
                                 "Role",
                                 value=current_role,
@@ -420,12 +425,13 @@ elif page == "3️⃣ Admin":
                             if update:
                                 employees.loc[
                                     employees["employee_id"] == emp_row["employee_id"],
-                                    ["role", "hourly_rate"]
-                                ] = [new_role, new_rate]
+                                    ["name", "role", "hourly_rate"]
+                                ] = [new_name, new_role, new_rate]
                                 save_csv(employees, EMPLOYEE_FILE)
                                 refresh_employees_cache()
                                 st.success(
-                                    f"Updated {selected_name}: role='{new_role}', hourly rate=${new_rate:.2f}"
+                                    f"Updated employee: '{selected_name}' → '{new_name}', "
+                                    f"role='{new_role}', hourly rate=${new_rate:.2f}"
                                 )
 
                     st.subheader("Current Employees")
