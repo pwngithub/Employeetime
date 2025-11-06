@@ -445,7 +445,7 @@ elif page == "3️⃣ Admin":
                     else:
                         st.dataframe(employees, use_container_width=True)
 
-                # ----- ADMIN: REPORTS (WITH COST + CUSTOMER KPI + EDITOR) -----
+                # ----- ADMIN: REPORTS (WITH COST + CUSTOMER KPI + EDIT/DELETE) -----
                 elif section == "Reports":
                     st.header("Reports (with Cost)")
 
@@ -549,12 +549,17 @@ elif page == "3️⃣ Admin":
                                 ).reset_index()
                                 st.dataframe(t, use_container_width=True)
 
-                                # -------- Editable Raw Data --------
-                                st.subheader("Raw Task Data (Admin Only – Click to Edit)")
+                                # -------- Editable Raw Data (with Delete) --------
+                                st.subheader("Raw Task Data (Admin Only – Edit or Delete)")
 
                                 edit_df = df_filtered.copy().reset_index(drop=True)
 
-                                # Columns the admin is allowed to edit directly
+                                # Add a delete column (default False)
+                                if "delete" not in edit_df.columns:
+                                    edit_df["delete"] = False
+                                else:
+                                    edit_df["delete"] = edit_df["delete"].fillna(False)
+
                                 editable_cols = [
                                     "date",
                                     "employee_name",
@@ -565,6 +570,7 @@ elif page == "3️⃣ Admin":
                                     "start_time",
                                     "end_time",
                                     "duration_minutes",
+                                    "delete",
                                 ]
 
                                 edited_df = st.data_editor(
@@ -581,10 +587,18 @@ elif page == "3️⃣ Admin":
                                 if st.button("💾 Save Task Changes", key="save_task_changes"):
                                     employees_all = get_employees()
 
-                                    # Merge edits back into full df by task_id
+                                    delete_ids = []
+
                                     for _, row in edited_df.iterrows():
                                         tid = row["task_id"]
+
+                                        if bool(row.get("delete", False)):
+                                            delete_ids.append(tid)
+                                            continue
+
                                         for col in editable_cols:
+                                            if col == "delete":
+                                                continue
                                             df.loc[df["task_id"] == tid, col] = row[col]
 
                                         # Recalculate cost if possible
@@ -600,6 +614,13 @@ elif page == "3️⃣ Admin":
                                         except Exception:
                                             pass
 
+                                    if delete_ids:
+                                        df = df[~df["task_id"].isin(delete_ids)]
+
                                     save_csv(df[TASK_COLUMNS], TASKS_FILE)
                                     refresh_tasks_cache()
-                                    st.success("Task changes saved.")
+
+                                    msg = "Changes saved."
+                                    if delete_ids:
+                                        msg += f" Deleted {len(delete_ids)} task(s)."
+                                    st.success(msg)
