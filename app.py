@@ -180,7 +180,6 @@ elif page == "2️⃣ Employee Tasks":
     task_types = get_task_types()
     tasks = get_tasks()
 
-    # Track Active Task in this browser session
     if "active_task_id" not in st.session_state:
         st.session_state["active_task_id"] = None
 
@@ -251,7 +250,7 @@ elif page == "2️⃣ Employee Tasks":
                 row = active.iloc[0]
                 start_dt = datetime.fromisoformat(str(row["start_time"]))
                 elapsed = datetime.now() - start_dt
-                elapsed_str = str(elapsed).split(".")[0]  # strip microseconds
+                elapsed_str = str(elapsed).split(".")[0]
 
                 c1, c2, c3 = st.columns(3)
                 with c1:
@@ -280,7 +279,6 @@ elif page == "2️⃣ Employee Tasks":
                     refresh_tasks_cache()
                     st.session_state["active_task_id"] = None
 
-                    # NOTE: cost is NOT shown here
                     st.success(f"Task finished. Duration {minutes:.1f} minutes.")
 
         # Task Log (cost hidden, but customer shown)
@@ -326,7 +324,6 @@ elif page == "3️⃣ Admin":
                 login = st.form_submit_button("Login")
 
                 if login:
-                    # admin_users is a mapping from username -> password
                     if username in admin_users and pw == admin_users[username]:
                         st.session_state["admin_authenticated"] = True
                         st.session_state["admin_username"] = username
@@ -448,7 +445,7 @@ elif page == "3️⃣ Admin":
                     else:
                         st.dataframe(employees, use_container_width=True)
 
-                # ----- ADMIN: REPORTS (WITH COST + CUSTOMER KPI) -----
+                # ----- ADMIN: REPORTS (WITH COST + CUSTOMER KPI + EDITOR) -----
                 elif section == "Reports":
                     st.header("Reports (with Cost)")
 
@@ -552,6 +549,57 @@ elif page == "3️⃣ Admin":
                                 ).reset_index()
                                 st.dataframe(t, use_container_width=True)
 
-                                # -------- Raw Data --------
-                                st.subheader("Raw Task Data (Admin Only)")
-                                st.dataframe(df_filtered, use_container_width=True)
+                                # -------- Editable Raw Data --------
+                                st.subheader("Raw Task Data (Admin Only – Click to Edit)")
+
+                                edit_df = df_filtered.copy().reset_index(drop=True)
+
+                                # Columns the admin is allowed to edit directly
+                                editable_cols = [
+                                    "date",
+                                    "employee_name",
+                                    "task_name",
+                                    "task_category",
+                                    "customer",
+                                    "task_description",
+                                    "start_time",
+                                    "end_time",
+                                    "duration_minutes",
+                                ]
+
+                                edited_df = st.data_editor(
+                                    edit_df,
+                                    use_container_width=True,
+                                    num_rows="fixed",
+                                    disabled=[
+                                        col for col in edit_df.columns
+                                        if col not in editable_cols
+                                    ],
+                                    key="raw_task_editor",
+                                )
+
+                                if st.button("💾 Save Task Changes", key="save_task_changes"):
+                                    employees_all = get_employees()
+
+                                    # Merge edits back into full df by task_id
+                                    for _, row in edited_df.iterrows():
+                                        tid = row["task_id"]
+                                        for col in editable_cols:
+                                            df.loc[df["task_id"] == tid, col] = row[col]
+
+                                        # Recalculate cost if possible
+                                        try:
+                                            duration = row["duration_minutes"]
+                                            if pd.notna(duration):
+                                                emp_name = row["employee_name"]
+                                                emp_row = employees_all[employees_all["name"] == emp_name]
+                                                if not emp_row.empty:
+                                                    rate = float(emp_row.iloc[0]["hourly_rate"])
+                                                    hours = float(duration) / 60.0
+                                                    df.loc[df["task_id"] == tid, "cost"] = round(hours * rate, 2)
+                                        except Exception:
+                                            pass
+
+                                    save_csv(df[TASK_COLUMNS], TASKS_FILE)
+                                    refresh_tasks_cache()
+                                    st.success("Task changes saved.")
