@@ -1898,5 +1898,5 @@ elif page == "4️⃣ Reports":
                 "hours_to_site_survey_scheduled",
                 "hours_to_prep_scheduled",
                 "hours_to_install_scheduled"
-            
+            ]
         ], use_container_width=True)
