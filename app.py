@@ -995,7 +995,7 @@ elif page == "4️⃣ Reports":
             st.caption("Sales pipeline steps are just tasks with category 'Sales', so they'll show up here like everything else.")
     "duration_minutes",
     "cost"
-]
+
 LEAD_COLUMNS = [
     "lead_id",
     "customer_name",
