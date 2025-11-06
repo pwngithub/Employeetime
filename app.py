@@ -27,6 +27,7 @@ TASK_TYPE_COLUMNS = ["task_type_id", "task_name", "category"]
 TASK_COLUMNS = [
     "task_id", "date", "employee_id", "employee_name",
     "task_type_id", "task_name", "task_category",
+    "customer",  # NEW: customer / lead
     "task_description", "start_time", "end_time",
     "duration_minutes", "cost"
 ]
@@ -196,6 +197,7 @@ elif page == "2️⃣ Employee Tasks":
                 employee_name = st.selectbox("Employee", employees["name"])
                 task_choice = st.selectbox("Task", task_types["task_name"])
             with col2:
+                customer = st.text_input("Customer / Lead (optional)")
                 desc = st.text_area("Notes", placeholder="Optional notes...")
             start_submitted = st.form_submit_button("▶️ Start Task")
 
@@ -216,6 +218,7 @@ elif page == "2️⃣ Employee Tasks":
                         "task_type_id": tt["task_type_id"],
                         "task_name": tt["task_name"],
                         "task_category": tt["category"],
+                        "customer": customer or "",
                         "task_description": desc,
                         "start_time": start_time.isoformat(),
                         "end_time": None,
@@ -227,8 +230,9 @@ elif page == "2️⃣ Employee Tasks":
                     refresh_tasks_cache()
                     st.session_state["active_task_id"] = tid
                     st.success(
-                        f"Started '{tt['task_name']}' for {employee_name} at "
-                        f"{start_time.strftime('%H:%M:%S')}"
+                        f"Started '{tt['task_name']}' for {employee_name}"
+                        + (f" (Customer: {customer})" if customer else "")
+                        + f" at {start_time.strftime('%H:%M:%S')}"
                     )
 
         # Active Task Panel
@@ -257,6 +261,8 @@ elif page == "2️⃣ Employee Tasks":
                 with c2:
                     st.write(f"**Started:** {row['start_time']}")
                     st.write(f"**Elapsed:** {elapsed_str}")
+                    if row.get("customer"):
+                        st.write(f"**Customer:** {row['customer']}")
                 with c3:
                     st.write("**Notes:**")
                     st.write(row["task_description"])
@@ -277,7 +283,7 @@ elif page == "2️⃣ Employee Tasks":
                     # NOTE: cost is NOT shown here
                     st.success(f"Task finished. Duration {minutes:.1f} minutes.")
 
-        # Task Log (cost hidden)
+        # Task Log (cost hidden, but customer shown)
         st.subheader("Task Log")
         df = get_tasks()
         if df.empty:
