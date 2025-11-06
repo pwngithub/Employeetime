@@ -27,7 +27,7 @@ TASK_TYPE_COLUMNS = ["task_type_id", "task_name", "category"]
 TASK_COLUMNS = [
     "task_id", "date", "employee_id", "employee_name",
     "task_type_id", "task_name", "task_category",
-    "customer",  # NEW: customer / lead
+    "customer",  # customer / lead
     "task_description", "start_time", "end_time",
     "duration_minutes", "cost"
 ]
@@ -115,7 +115,8 @@ page = st.sidebar.radio(
         "2️⃣ Employee Tasks",
         "3️⃣ Admin",
     ],
-    key="main_nav"  # unique key to avoid duplicate element errors
+    index=1,  # 0 = Task List, 1 = Employee Tasks, 2 = Admin
+    key="main_nav"
 )
 
 # -------------------------------
@@ -180,7 +181,6 @@ elif page == "2️⃣ Employee Tasks":
     task_types = get_task_types()
     tasks = get_tasks()
 
-    # Track Active Task in this browser session
     if "active_task_id" not in st.session_state:
         st.session_state["active_task_id"] = None
 
@@ -251,7 +251,7 @@ elif page == "2️⃣ Employee Tasks":
                 row = active.iloc[0]
                 start_dt = datetime.fromisoformat(str(row["start_time"]))
                 elapsed = datetime.now() - start_dt
-                elapsed_str = str(elapsed).split(".")[0]  # strip microseconds
+                elapsed_str = str(elapsed).split(".")[0]
 
                 c1, c2, c3 = st.columns(3)
                 with c1:
@@ -280,7 +280,6 @@ elif page == "2️⃣ Employee Tasks":
                     refresh_tasks_cache()
                     st.session_state["active_task_id"] = None
 
-                    # NOTE: cost is NOT shown here
                     st.success(f"Task finished. Duration {minutes:.1f} minutes.")
 
         # Task Log (cost hidden, but customer shown)
@@ -299,11 +298,6 @@ elif page == "2️⃣ Employee Tasks":
 elif page == "3️⃣ Admin":
     st.title("Admin Area")
 
-    # Expecting [admin_users] in .streamlit/secrets.toml
-    # Example:
-    # [admin_users]
-    # brian = "fiberboss!"
-    # ashley = "salesqueen!"
     admin_users = st.secrets.get("admin_users", None)
 
     if admin_users is None:
@@ -326,7 +320,6 @@ elif page == "3️⃣ Admin":
                 login = st.form_submit_button("Login")
 
                 if login:
-                    # admin_users is a mapping from username -> password
                     if username in admin_users and pw == admin_users[username]:
                         st.session_state["admin_authenticated"] = True
                         st.session_state["admin_username"] = username
@@ -448,7 +441,7 @@ elif page == "3️⃣ Admin":
                     else:
                         st.dataframe(employees, use_container_width=True)
 
-                # ----- ADMIN: REPORTS (WITH COST) -----
+                # ----- ADMIN: REPORTS (WITH COST + CUSTOMER KPI + EDIT/DELETE) -----
                 elif section == "Reports":
                     st.header("Reports (with Cost)")
 
@@ -458,26 +451,204 @@ elif page == "3️⃣ Admin":
                     else:
                         df = tasks.copy()
                         df["date"] = pd.to_datetime(df["date"], errors="coerce")
+
+                        # Ensure 'customer' exists even for old data
+                        if "customer" not in df.columns:
+                            df["customer"] = ""
+
                         df_done = df[df["duration_minutes"].notna()]
 
                         if df_done.empty:
                             st.info("No completed tasks yet.")
                         else:
-                            st.subheader("Summary by Employee")
-                            emp = df_done.groupby("employee_name").agg(
-                                total_hours=("duration_minutes", lambda x: round(x.sum() / 60, 2)),
-                                total_cost=("cost", "sum"),
-                                tasks=("task_id", "count")
-                            ).reset_index()
-                            st.dataframe(emp, use_container_width=True)
+                            # Filters
+                            c1, c2, c3 = st.columns(3)
+                            with c1:
+                                start_date = st.date_input(
+                                    "Start date",
+                                    value=df_done["date"].min().date()
+                                )
+                            with c2:
+                                end_date = st.date_input(
+                                    "End date",
+                                    value=df_done["date"].max().date()
+                                )
+                            with c3:
+                                customer_filter = st.text_input(
+                                    "Filter by customer (contains)",
+                                    placeholder="leave blank for all"
+                                )
 
-                            st.subheader("Summary by Task")
-                            t = df_done.groupby(["task_name", "task_category"]).agg(
-                                total_hours=("duration_minutes", lambda x: round(x.sum() / 60, 2)),
-                                total_cost=("cost", "sum"),
-                                tasks=("task_id", "count")
-                            ).reset_index()
-                            st.dataframe(t, use_container_width=True)
+                            mask = (df_done["date"] >= pd.to_datetime(start_date)) & (
+                                df_done["date"] <= pd.to_datetime(end_date)
+                            )
 
-                            st.subheader("Raw Task Data (Admin Only)")
-                            st.dataframe(df_done, use_container_width=True)
+                            if customer_filter:
+                                mask &= df_done["customer"].fillna("").str.contains(
+                                    customer_filter, case=False, na=False
+                                )
+
+                            df_filtered = df_done[mask]
+
+                            if df_filtered.empty:
+                                st.warning("No tasks match the selected filters.")
+                            else:
+                                # -------- TOP-LEVEL KPIs (FILTERED) --------
+                                total_tasks = len(df_filtered)
+                                total_minutes = df_filtered["duration_minutes"].fillna(0).sum()
+                                total_hours = round(total_minutes / 60.0, 2)
+                                total_cost = float(df_filtered["cost"].fillna(0).sum())
+                                # count only non-empty customers
+                                cust_series = df_filtered["customer"].fillna("").astype(str).str.strip()
+                                unique_customers = cust_series.replace("", pd.NA).nunique()
+
+                                k1, k2, k3, k4 = st.columns(4)
+                                with k1:
+                                    st.metric("Total Tasks", total_tasks)
+                                with k2:
+                                    st.metric("Total Hours", f"{total_hours:.2f}")
+                                with k3:
+                                    st.metric("Total Cost", f"${total_cost:,.2f}")
+                                with k4:
+                                    st.metric("Customers", unique_customers)
+
+                                st.markdown("---")
+
+                                # -------- Summary by Customer --------
+                                st.subheader("Summary by Customer")
+
+                                cust_df = df_filtered.copy()
+                                cust_df["customer"] = cust_df["customer"].fillna("")
+                                cust_df.loc[cust_df["customer"] == "", "customer"] = "Unspecified"
+
+                                by_customer = cust_df.groupby("customer").agg(
+                                    total_hours=("duration_minutes", lambda x: round(x.sum() / 60, 2)),
+                                    total_cost=("cost", "sum"),
+                                    tasks=("task_id", "count"),
+                                ).reset_index()
+
+                                st.dataframe(by_customer, use_container_width=True)
+
+                                selected_customer = st.selectbox(
+                                    "View KPIs for a single customer",
+                                    options=["All"] + sorted(by_customer["customer"].tolist()),
+                                    index=0,
+                                    key="customer_kpi_select",
+                                )
+
+                                if selected_customer != "All":
+                                    row = by_customer[by_customer["customer"] == selected_customer].iloc[0]
+                                    k1c, k2c, k3c = st.columns(3)
+                                    with k1c:
+                                        st.metric("Customer", selected_customer)
+                                    with k2c:
+                                        st.metric("Total Hours", f"{row['total_hours']:.2f}")
+                                    with k3c:
+                                        st.metric("Total Cost", f"${row['total_cost']:.2f}")
+
+                                st.markdown("---")
+
+                                # -------- Summary by Employee --------
+                                st.subheader("Summary by Employee")
+                                emp = df_filtered.groupby("employee_name").agg(
+                                    total_hours=("duration_minutes", lambda x: round(x.sum() / 60, 2)),
+                                    total_cost=("cost", "sum"),
+                                    tasks=("task_id", "count"),
+                                ).reset_index()
+                                st.dataframe(emp, use_container_width=True)
+
+                                # -------- Summary by Task --------
+                                st.subheader("Summary by Task")
+                                t = df_filtered.groupby(["task_name", "task_category"]).agg(
+                                    total_hours=("duration_minutes", lambda x: round(x.sum() / 60, 2)),
+                                    total_cost=("cost", "sum"),
+                                    tasks=("task_id", "count"),
+                                ).reset_index()
+                                st.dataframe(t, use_container_width=True)
+
+                                # -------- Editable Raw Data (with Delete) --------
+                                st.subheader("Raw Task Data (Admin Only – Edit or Delete)")
+
+                                # Start from filtered df (with original indices preserved)
+                                edit_df = df_filtered.copy()
+
+                                # Add a delete column (default False)
+                                if "delete" not in edit_df.columns:
+                                    edit_df["delete"] = False
+                                else:
+                                    edit_df["delete"] = edit_df["delete"].fillna(False)
+
+                                hidden_cols = ["task_id", "employee_id", "task_type_id"]
+                                all_cols = edit_df.columns.tolist()
+
+                                # Show 'delete' first, then everything except hidden + delete
+                                visible_cols = ["delete"] + [
+                                    c for c in all_cols if c not in hidden_cols + ["delete"]
+                                ]
+
+                                # Columns admin is allowed to edit
+                                editable_cols = [
+                                    "date",
+                                    "employee_name",
+                                    "task_name",
+                                    "task_category",
+                                    "customer",
+                                    "task_description",
+                                    "start_time",
+                                    "end_time",
+                                    "duration_minutes",
+                                    "delete",
+                                ]
+
+                                edited_df = st.data_editor(
+                                    edit_df[visible_cols],
+                                    use_container_width=True,
+                                    num_rows="fixed",
+                                    disabled=[
+                                        c for c in visible_cols if c not in editable_cols
+                                    ],
+                                    key="raw_task_editor",
+                                )
+
+                                if st.button("💾 Save Task Changes", key="save_task_changes"):
+                                    employees_all = get_employees()
+                                    delete_indices = []
+
+                                    # df_filtered.index are the original row indices in df
+                                    for orig_idx, (_, row) in zip(df_filtered.index, edited_df.iterrows()):
+                                        # handle delete
+                                        if bool(row.get("delete", False)):
+                                            delete_indices.append(orig_idx)
+                                            continue
+
+                                        # update editable fields
+                                        for col in editable_cols:
+                                            if col == "delete":
+                                                continue
+                                            if col in df.columns and col in edited_df.columns:
+                                                df.loc[orig_idx, col] = row[col]
+
+                                        # recalc cost if possible
+                                        try:
+                                            duration = row.get("duration_minutes", None)
+                                            if pd.notna(duration):
+                                                emp_name = row.get("employee_name", None)
+                                                emp_row = employees_all[employees_all["name"] == emp_name]
+                                                if not emp_row.empty:
+                                                    rate = float(emp_row.iloc[0]["hourly_rate"])
+                                                    hours = float(duration) / 60.0
+                                                    df.loc[orig_idx, "cost"] = round(hours * rate, 2)
+                                        except Exception:
+                                            pass
+
+                                    # delete rows if needed
+                                    if delete_indices:
+                                        df = df.drop(index=delete_indices)
+
+                                    save_csv(df[TASK_COLUMNS], TASKS_FILE)
+                                    refresh_tasks_cache()
+
+                                    msg = "Changes saved."
+                                    if delete_indices:
+                                        msg += f" Deleted {len(delete_indices)} task(s)."
+                                    st.success(msg)
