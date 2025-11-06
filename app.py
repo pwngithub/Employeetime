@@ -492,6 +492,27 @@ elif page == "3️⃣ Admin":
                             if df_filtered.empty:
                                 st.warning("No tasks match the selected filters.")
                             else:
+                                # -------- TOP-LEVEL KPIs (FILTERED) --------
+                                total_tasks = len(df_filtered)
+                                total_minutes = df_filtered["duration_minutes"].fillna(0).sum()
+                                total_hours = round(total_minutes / 60.0, 2)
+                                total_cost = float(df_filtered["cost"].fillna(0).sum())
+                                # count only non-empty customers
+                                cust_series = df_filtered["customer"].fillna("").astype(str).str.strip()
+                                unique_customers = cust_series.replace("", pd.NA).nunique()
+
+                                k1, k2, k3, k4 = st.columns(4)
+                                with k1:
+                                    st.metric("Total Tasks", total_tasks)
+                                with k2:
+                                    st.metric("Total Hours", f"{total_hours:.2f}")
+                                with k3:
+                                    st.metric("Total Cost", f"${total_cost:,.2f}")
+                                with k4:
+                                    st.metric("Customers", unique_customers)
+
+                                st.markdown("---")
+
                                 # -------- Summary by Customer --------
                                 st.subheader("Summary by Customer")
 
@@ -516,12 +537,12 @@ elif page == "3️⃣ Admin":
 
                                 if selected_customer != "All":
                                     row = by_customer[by_customer["customer"] == selected_customer].iloc[0]
-                                    k1, k2, k3 = st.columns(3)
-                                    with k1:
+                                    k1c, k2c, k3c = st.columns(3)
+                                    with k1c:
                                         st.metric("Customer", selected_customer)
-                                    with k2:
+                                    with k2c:
                                         st.metric("Total Hours", f"{row['total_hours']:.2f}")
-                                    with k3:
+                                    with k3c:
                                         st.metric("Total Cost", f"${row['total_cost']:.2f}")
 
                                 st.markdown("---")
