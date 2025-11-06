@@ -115,6 +115,7 @@ page = st.sidebar.radio(
         "2️⃣ Employee Tasks",
         "3️⃣ Admin",
     ],
+    index=1,  # 0 = Task List, 1 = Employee Tasks, 2 = Admin
     key="main_nav"
 )
 
