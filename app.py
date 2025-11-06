@@ -115,7 +115,7 @@ page = st.sidebar.radio(
         "2️⃣ Employee Tasks",
         "3️⃣ Admin",
     ],
-    key="main_nav"  # unique key to avoid duplicate element errors
+    key="main_nav"
 )
 
 # -------------------------------
@@ -297,11 +297,6 @@ elif page == "2️⃣ Employee Tasks":
 elif page == "3️⃣ Admin":
     st.title("Admin Area")
 
-    # Expecting [admin_users] in .streamlit/secrets.toml
-    # Example:
-    # [admin_users]
-    # brian = "fiberboss!"
-    # ashley = "salesqueen!"
     admin_users = st.secrets.get("admin_users", None)
 
     if admin_users is None:
@@ -552,7 +547,8 @@ elif page == "3️⃣ Admin":
                                 # -------- Editable Raw Data (with Delete) --------
                                 st.subheader("Raw Task Data (Admin Only – Edit or Delete)")
 
-                                edit_df = df_filtered.copy().reset_index(drop=True)
+                                # Start from filtered df (with original indices preserved)
+                                edit_df = df_filtered.copy()
 
                                 # Add a delete column (default False)
                                 if "delete" not in edit_df.columns:
@@ -560,6 +556,15 @@ elif page == "3️⃣ Admin":
                                 else:
                                     edit_df["delete"] = edit_df["delete"].fillna(False)
 
+                                hidden_cols = ["task_id", "employee_id", "task_type_id"]
+                                all_cols = edit_df.columns.tolist()
+
+                                # Show 'delete' first, then everything except hidden + delete
+                                visible_cols = ["delete"] + [
+                                    c for c in all_cols if c not in hidden_cols + ["delete"]
+                                ]
+
+                                # Columns admin is allowed to edit
                                 editable_cols = [
                                     "date",
                                     "employee_name",
@@ -574,53 +579,54 @@ elif page == "3️⃣ Admin":
                                 ]
 
                                 edited_df = st.data_editor(
-                                    edit_df,
+                                    edit_df[visible_cols],
                                     use_container_width=True,
                                     num_rows="fixed",
                                     disabled=[
-                                        col for col in edit_df.columns
-                                        if col not in editable_cols
+                                        c for c in visible_cols if c not in editable_cols
                                     ],
                                     key="raw_task_editor",
                                 )
 
                                 if st.button("💾 Save Task Changes", key="save_task_changes"):
                                     employees_all = get_employees()
+                                    delete_indices = []
 
-                                    delete_ids = []
-
-                                    for _, row in edited_df.iterrows():
-                                        tid = row["task_id"]
-
+                                    # df_filtered.index are the original row indices in df
+                                    for orig_idx, (_, row) in zip(df_filtered.index, edited_df.iterrows()):
+                                        # handle delete
                                         if bool(row.get("delete", False)):
-                                            delete_ids.append(tid)
+                                            delete_indices.append(orig_idx)
                                             continue
 
+                                        # update editable fields
                                         for col in editable_cols:
                                             if col == "delete":
                                                 continue
-                                            df.loc[df["task_id"] == tid, col] = row[col]
+                                            if col in df.columns and col in edited_df.columns:
+                                                df.loc[orig_idx, col] = row[col]
 
-                                        # Recalculate cost if possible
+                                        # recalc cost if possible
                                         try:
-                                            duration = row["duration_minutes"]
+                                            duration = row.get("duration_minutes", None)
                                             if pd.notna(duration):
-                                                emp_name = row["employee_name"]
+                                                emp_name = row.get("employee_name", None)
                                                 emp_row = employees_all[employees_all["name"] == emp_name]
                                                 if not emp_row.empty:
                                                     rate = float(emp_row.iloc[0]["hourly_rate"])
                                                     hours = float(duration) / 60.0
-                                                    df.loc[df["task_id"] == tid, "cost"] = round(hours * rate, 2)
+                                                    df.loc[orig_idx, "cost"] = round(hours * rate, 2)
                                         except Exception:
                                             pass
 
-                                    if delete_ids:
-                                        df = df[~df["task_id"].isin(delete_ids)]
+                                    # delete rows if needed
+                                    if delete_indices:
+                                        df = df.drop(index=delete_indices)
 
                                     save_csv(df[TASK_COLUMNS], TASKS_FILE)
                                     refresh_tasks_cache()
 
                                     msg = "Changes saved."
-                                    if delete_ids:
-                                        msg += f" Deleted {len(delete_ids)} task(s)."
+                                    if delete_indices:
+                                        msg += f" Deleted {len(delete_indices)} task(s)."
                                     st.success(msg)
