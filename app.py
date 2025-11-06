@@ -27,7 +27,7 @@ TASK_TYPE_COLUMNS = ["task_type_id", "task_name", "category"]
 TASK_COLUMNS = [
     "task_id", "date", "employee_id", "employee_name",
     "task_type_id", "task_name", "task_category",
-    "customer",  # NEW: customer / lead
+    "customer",  # customer / lead
     "task_description", "start_time", "end_time",
     "duration_minutes", "cost"
 ]
@@ -448,104 +448,105 @@ elif page == "3️⃣ Admin":
                     else:
                         st.dataframe(employees, use_container_width=True)
 
-                # ----- ADMIN: REPORTS (WITH COST) -----
+                # ----- ADMIN: REPORTS (WITH COST + CUSTOMER KPI) -----
                 elif section == "Reports":
-    st.header("Reports (with Cost)")
+                    st.header("Reports (with Cost)")
 
-    tasks = get_tasks()
-    if tasks.empty:
-        st.info("No tasks logged yet.")
-    else:
-        df = tasks.copy()
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df_done = df[df["duration_minutes"].notna()]
+                    tasks = get_tasks()
+                    if tasks.empty:
+                        st.info("No tasks logged yet.")
+                    else:
+                        df = tasks.copy()
+                        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+                        df_done = df[df["duration_minutes"].notna()]
 
-        if df_done.empty:
-            st.info("No completed tasks yet.")
-        else:
-            # Optional filters
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                start_date = st.date_input(
-                    "Start date",
-                    value=df_done["date"].min().date()
-                )
-            with c2:
-                end_date = st.date_input(
-                    "End date",
-                    value=df_done["date"].max().date()
-                )
-            with c3:
-                customer_filter = st.text_input(
-                    "Filter by customer (contains)",
-                    placeholder="leave blank for all"
-                )
+                        if df_done.empty:
+                            st.info("No completed tasks yet.")
+                        else:
+                            # Filters
+                            c1, c2, c3 = st.columns(3)
+                            with c1:
+                                start_date = st.date_input(
+                                    "Start date",
+                                    value=df_done["date"].min().date()
+                                )
+                            with c2:
+                                end_date = st.date_input(
+                                    "End date",
+                                    value=df_done["date"].max().date()
+                                )
+                            with c3:
+                                customer_filter = st.text_input(
+                                    "Filter by customer (contains)",
+                                    placeholder="leave blank for all"
+                                )
 
-            mask = (df_done["date"] >= pd.to_datetime(start_date)) & (
-                df_done["date"] <= pd.to_datetime(end_date)
-            )
+                            mask = (df_done["date"] >= pd.to_datetime(start_date)) & (
+                                df_done["date"] <= pd.to_datetime(end_date)
+                            )
 
-            if customer_filter:
-                mask &= df_done["customer"].fillna("").str.contains(
-                    customer_filter, case=False, na=False
-                )
+                            if customer_filter:
+                                mask &= df_done["customer"].fillna("").str.contains(
+                                    customer_filter, case=False, na=False
+                                )
 
-            df_filtered = df_done[mask]
+                            df_filtered = df_done[mask]
 
-            if df_filtered.empty:
-                st.warning("No tasks match the selected filters.")
-            else:
-                # ----------------- KPI: Summary by Customer -----------------
-                st.subheader("Summary by Customer")
+                            if df_filtered.empty:
+                                st.warning("No tasks match the selected filters.")
+                            else:
+                                # -------- Summary by Customer --------
+                                st.subheader("Summary by Customer")
 
-                cust_df = df_filtered.copy()
-                cust_df["customer"] = cust_df["customer"].fillna("")
-                cust_df.loc[cust_df["customer"] == "", "customer"] = "Unspecified"
+                                cust_df = df_filtered.copy()
+                                cust_df["customer"] = cust_df["customer"].fillna("")
+                                cust_df.loc[cust_df["customer"] == "", "customer"] = "Unspecified"
 
-                by_customer = cust_df.groupby("customer").agg(
-                    total_hours=("duration_minutes", lambda x: round(x.sum() / 60, 2)),
-                    total_cost=("cost", "sum"),
-                    tasks=("task_id", "count"),
-                ).reset_index()
+                                by_customer = cust_df.groupby("customer").agg(
+                                    total_hours=("duration_minutes", lambda x: round(x.sum() / 60, 2)),
+                                    total_cost=("cost", "sum"),
+                                    tasks=("task_id", "count"),
+                                ).reset_index()
 
-                st.dataframe(by_customer, use_container_width=True)
+                                st.dataframe(by_customer, use_container_width=True)
 
-                # Optional single-customer KPI selection
-                selected_customer = st.selectbox(
-                    "View KPIs for a single customer",
-                    options=["All"] + sorted(by_customer["customer"].tolist()),
-                    index=0,
-                    key="customer_kpi_select",
-                )
+                                selected_customer = st.selectbox(
+                                    "View KPIs for a single customer",
+                                    options=["All"] + sorted(by_customer["customer"].tolist()),
+                                    index=0,
+                                    key="customer_kpi_select",
+                                )
 
-                if selected_customer != "All":
-                    row = by_customer[by_customer["customer"] == selected_customer].iloc[0]
-                    k1, k2, k3 = st.columns(3)
-                    with k1:
-                        st.metric("Customer", selected_customer)
-                    with k2:
-                        st.metric("Total Hours", f"{row['total_hours']:.2f}")
-                    with k3:
-                        st.metric("Total Cost", f"${row['total_cost']:.2f}")
+                                if selected_customer != "All":
+                                    row = by_customer[by_customer["customer"] == selected_customer].iloc[0]
+                                    k1, k2, k3 = st.columns(3)
+                                    with k1:
+                                        st.metric("Customer", selected_customer)
+                                    with k2:
+                                        st.metric("Total Hours", f"{row['total_hours']:.2f}")
+                                    with k3:
+                                        st.metric("Total Cost", f"${row['total_cost']:.2f}")
 
-                st.markdown("---")
+                                st.markdown("---")
 
-                # ----------------- Existing summaries -----------------
-                st.subheader("Summary by Employee")
-                emp = df_filtered.groupby("employee_name").agg(
-                    total_hours=("duration_minutes", lambda x: round(x.sum() / 60, 2)),
-                    total_cost=("cost", "sum"),
-                    tasks=("task_id", "count"),
-                ).reset_index()
-                st.dataframe(emp, use_container_width=True)
+                                # -------- Summary by Employee --------
+                                st.subheader("Summary by Employee")
+                                emp = df_filtered.groupby("employee_name").agg(
+                                    total_hours=("duration_minutes", lambda x: round(x.sum() / 60, 2)),
+                                    total_cost=("cost", "sum"),
+                                    tasks=("task_id", "count"),
+                                ).reset_index()
+                                st.dataframe(emp, use_container_width=True)
 
-                st.subheader("Summary by Task")
-                t = df_filtered.groupby(["task_name", "task_category"]).agg(
-                    total_hours=("duration_minutes", lambda x: round(x.sum() / 60, 2)),
-                    total_cost=("cost", "sum"),
-                    tasks=("task_id", "count"),
-                ).reset_index()
-                st.dataframe(t, use_container_width=True)
+                                # -------- Summary by Task --------
+                                st.subheader("Summary by Task")
+                                t = df_filtered.groupby(["task_name", "task_category"]).agg(
+                                    total_hours=("duration_minutes", lambda x: round(x.sum() / 60, 2)),
+                                    total_cost=("cost", "sum"),
+                                    tasks=("task_id", "count"),
+                                ).reset_index()
+                                st.dataframe(t, use_container_width=True)
 
-                st.subheader("Raw Task Data (Admin Only)")
-                st.dataframe(df_filtered, use_container_width=True)
+                                # -------- Raw Data --------
+                                st.subheader("Raw Task Data (Admin Only)")
+                                st.dataframe(df_filtered, use_container_width=True)
