@@ -288,160 +288,183 @@ elif page == "2️⃣ Employee Tasks":
 
 
 # -------------------------------
-# PAGE 3: ADMIN (PASSWORD PROTECTED)
+# PAGE 3: ADMIN (USERNAME + PASSWORD)
 # -------------------------------
 elif page == "3️⃣ Admin":
     st.title("Admin Area")
 
-    # You can override this in .streamlit/secrets.toml as ADMIN_PASSWORD
-    admin_password = st.secrets.get("ADMIN_PASSWORD", "pioneer123")
+    # Expecting [admin_users] in .streamlit/secrets.toml
+    # Example:
+    # [admin_users]
+    # brian = "fiberboss!"
+    # ashley = "salesqueen!"
+    admin_users = st.secrets.get("admin_users", None)
 
-    if "admin_authenticated" not in st.session_state:
-        st.session_state["admin_authenticated"] = False
-
-    if not st.session_state["admin_authenticated"]:
-        st.subheader("Login")
-        with st.form("admin_login"):
-            pw = st.text_input("Admin Password", type="password")
-            login = st.form_submit_button("Login")
-            if login:
-                if pw == admin_password:
-                    st.session_state["admin_authenticated"] = True
-                    st.success("Admin access granted.")
-                else:
-                    st.error("Incorrect password.")
-    else:
-        st.success("Admin access granted.")
-        section = st.radio(
-            "Admin Section",
-            ["Employees", "Reports"],
-            key="admin_section_radio"
+    if admin_users is None:
+        st.error(
+            "Admin users not configured in secrets.\n\n"
+            "In Streamlit Cloud, go to 'Edit secrets' and add:\n\n"
+            "[admin_users]\n"
+            "brian = \"yourPasswordHere\""
         )
+    else:
+        if "admin_authenticated" not in st.session_state:
+            st.session_state["admin_authenticated"] = False
+            st.session_state["admin_username"] = None
 
-        # ----- ADMIN: EMPLOYEES -----
-        if section == "Employees":
-            st.header("Manage Employees")
+        if not st.session_state["admin_authenticated"]:
+            st.subheader("Login")
+            with st.form("admin_login_form"):
+                username = st.text_input("Username")
+                pw = st.text_input("Password", type="password")
+                login = st.form_submit_button("Login")
 
-            employees = get_employees()
-
-            st.subheader("Add / Update Employee")
-            with st.form("admin_employee_form", clear_on_submit=True):
-                col1, col2 = st.columns(2)
-                with col1:
-                    name = st.text_input("Name")
-                    role = st.text_input("Role", value="Technician")
-                with col2:
-                    hourly_rate = st.number_input(
-                        "Hourly Rate ($/hour)", min_value=0.0, step=0.5, value=25.0
-                    )
-                    employee_id = st.text_input(
-                        "Employee ID (optional, auto if blank)"
-                    ).strip()
-                submitted = st.form_submit_button("Save Employee")
-
-                if submitted:
-                    if not name:
-                        st.warning("Name is required.")
+                if login:
+                    # admin_users is a mapping from username -> password
+                    if username in admin_users and pw == admin_users[username]:
+                        st.session_state["admin_authenticated"] = True
+                        st.session_state["admin_username"] = username
+                        st.success(f"Welcome, {username}!")
                     else:
-                        if not employee_id:
-                            employee_id = f"E{int(datetime.now().timestamp())}"
-                        mask = employees["employee_id"] == employee_id
-                        new_row = {
-                            "employee_id": employee_id,
-                            "name": name,
-                            "role": role,
-                            "hourly_rate": hourly_rate,
-                        }
-                        if mask.any():
-                            employees.loc[mask, :] = new_row
-                            st.success(f"Updated employee {name}.")
-                        else:
-                            employees = pd.concat(
-                                [employees, pd.DataFrame([new_row])],
-                                ignore_index=True
-                            )
-                            st.success(f"Added employee {name}.")
-                        save_csv(employees, EMPLOYEE_FILE)
-                        refresh_employees_cache()
+                        st.error("Invalid username or password.")
+        else:
+            st.success(f"Admin access granted ({st.session_state['admin_username']}).")
+            if st.button("Logout", key="admin_logout"):
+                st.session_state["admin_authenticated"] = False
+                st.session_state["admin_username"] = None
+                st.experimental_rerun()
 
-            st.subheader("Edit Existing Employee Hourly Rate")
-            employees = get_employees()
-            if employees.empty:
-                st.info("No employees to edit.")
-            else:
-                emp_names = employees["name"].tolist()
-                selected_name = st.selectbox(
-                    "Select Employee to Edit",
-                    options=emp_names,
-                    key="edit_emp_select"
+            if st.session_state["admin_authenticated"]:
+                section = st.radio(
+                    "Admin Section",
+                    ["Employees", "Reports"],
+                    key="admin_section_radio"
                 )
-                emp_row = employees[employees["name"] == selected_name].iloc[0]
-                current_rate = float(emp_row["hourly_rate"])
-                current_role = emp_row["role"]
 
-                with st.form("edit_employee_form"):
-                    new_role = st.text_input(
-                        "Role",
-                        value=current_role,
-                        key="edit_role_input"
-                    )
-                    new_rate = st.number_input(
-                        "New Hourly Rate ($/hour)",
-                        min_value=0.0,
-                        step=0.5,
-                        value=current_rate,
-                        key="edit_rate_input"
-                    )
-                    update = st.form_submit_button("Update Employee")
+                # ----- ADMIN: EMPLOYEES -----
+                if section == "Employees":
+                    st.header("Manage Employees")
 
-                    if update:
-                        employees.loc[
-                            employees["employee_id"] == emp_row["employee_id"],
-                            ["role", "hourly_rate"]
-                        ] = [new_role, new_rate]
-                        save_csv(employees, EMPLOYEE_FILE)
-                        refresh_employees_cache()
-                        st.success(
-                            f"Updated {selected_name}: role='{new_role}', hourly rate=${new_rate:.2f}"
+                    employees = get_employees()
+
+                    st.subheader("Add / Update Employee")
+                    with st.form("admin_employee_form", clear_on_submit=True):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            name = st.text_input("Name")
+                            role = st.text_input("Role", value="Technician")
+                        with col2:
+                            hourly_rate = st.number_input(
+                                "Hourly Rate ($/hour)", min_value=0.0, step=0.5, value=25.0
+                            )
+                            employee_id = st.text_input(
+                                "Employee ID (optional, auto if blank)"
+                            ).strip()
+                        submitted = st.form_submit_button("Save Employee")
+
+                        if submitted:
+                            if not name:
+                                st.warning("Name is required.")
+                            else:
+                                if not employee_id:
+                                    employee_id = f"E{int(datetime.now().timestamp())}"
+                                mask = employees["employee_id"] == employee_id
+                                new_row = {
+                                    "employee_id": employee_id,
+                                    "name": name,
+                                    "role": role,
+                                    "hourly_rate": hourly_rate,
+                                }
+                                if mask.any():
+                                    employees.loc[mask, :] = new_row
+                                    st.success(f"Updated employee {name}.")
+                                else:
+                                    employees = pd.concat(
+                                        [employees, pd.DataFrame([new_row])],
+                                        ignore_index=True
+                                    )
+                                    st.success(f"Added employee {name}.")
+                                save_csv(employees, EMPLOYEE_FILE)
+                                refresh_employees_cache()
+
+                    st.subheader("Edit Existing Employee Hourly Rate")
+                    employees = get_employees()
+                    if employees.empty:
+                        st.info("No employees to edit.")
+                    else:
+                        emp_names = employees["name"].tolist()
+                        selected_name = st.selectbox(
+                            "Select Employee to Edit",
+                            options=emp_names,
+                            key="edit_emp_select"
                         )
+                        emp_row = employees[employees["name"] == selected_name].iloc[0]
+                        current_rate = float(emp_row["hourly_rate"])
+                        current_role = emp_row["role"]
 
-            st.subheader("Current Employees")
-            employees = get_employees()
-            if employees.empty:
-                st.info("No employees yet.")
-            else:
-                st.dataframe(employees, use_container_width=True)
+                        with st.form("edit_employee_form"):
+                            new_role = st.text_input(
+                                "Role",
+                                value=current_role,
+                                key="edit_role_input"
+                            )
+                            new_rate = st.number_input(
+                                "New Hourly Rate ($/hour)",
+                                min_value=0.0,
+                                step=0.5,
+                                value=current_rate,
+                                key="edit_rate_input"
+                            )
+                            update = st.form_submit_button("Update Employee")
 
-        # ----- ADMIN: REPORTS (WITH COST) -----
-        elif section == "Reports":
-            st.header("Reports (with Cost)")
+                            if update:
+                                employees.loc[
+                                    employees["employee_id"] == emp_row["employee_id"],
+                                    ["role", "hourly_rate"]
+                                ] = [new_role, new_rate]
+                                save_csv(employees, EMPLOYEE_FILE)
+                                refresh_employees_cache()
+                                st.success(
+                                    f"Updated {selected_name}: role='{new_role}', hourly rate=${new_rate:.2f}"
+                                )
 
-            tasks = get_tasks()
-            if tasks.empty:
-                st.info("No tasks logged yet.")
-            else:
-                df = tasks.copy()
-                df["date"] = pd.to_datetime(df["date"], errors="coerce")
-                df_done = df[df["duration_minutes"].notna()]
+                    st.subheader("Current Employees")
+                    employees = get_employees()
+                    if employees.empty:
+                        st.info("No employees yet.")
+                    else:
+                        st.dataframe(employees, use_container_width=True)
 
-                if df_done.empty:
-                    st.info("No completed tasks yet.")
-                else:
-                    st.subheader("Summary by Employee")
-                    emp = df_done.groupby("employee_name").agg(
-                        total_hours=("duration_minutes", lambda x: round(x.sum() / 60, 2)),
-                        total_cost=("cost", "sum"),
-                        tasks=("task_id", "count")
-                    ).reset_index()
-                    st.dataframe(emp, use_container_width=True)
+                # ----- ADMIN: REPORTS (WITH COST) -----
+                elif section == "Reports":
+                    st.header("Reports (with Cost)")
 
-                    st.subheader("Summary by Task")
-                    t = df_done.groupby(["task_name", "task_category"]).agg(
-                        total_hours=("duration_minutes", lambda x: round(x.sum() / 60, 2)),
-                        total_cost=("cost", "sum"),
-                        tasks=("task_id", "count")
-                    ).reset_index()
-                    st.dataframe(t, use_container_width=True)
+                    tasks = get_tasks()
+                    if tasks.empty:
+                        st.info("No tasks logged yet.")
+                    else:
+                        df = tasks.copy()
+                        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+                        df_done = df[df["duration_minutes"].notna()]
 
-                    st.subheader("Raw Task Data (Admin Only)")
-                    st.dataframe(df_done, use_container_width=True)
+                        if df_done.empty:
+                            st.info("No completed tasks yet.")
+                        else:
+                            st.subheader("Summary by Employee")
+                            emp = df_done.groupby("employee_name").agg(
+                                total_hours=("duration_minutes", lambda x: round(x.sum() / 60, 2)),
+                                total_cost=("cost", "sum"),
+                                tasks=("task_id", "count")
+                            ).reset_index()
+                            st.dataframe(emp, use_container_width=True)
+
+                            st.subheader("Summary by Task")
+                            t = df_done.groupby(["task_name", "task_category"]).agg(
+                                total_hours=("duration_minutes", lambda x: round(x.sum() / 60, 2)),
+                                total_cost=("cost", "sum"),
+                                tasks=("task_id", "count")
+                            ).reset_index()
+                            st.dataframe(t, use_container_width=True)
+
+                            st.subheader("Raw Task Data (Admin Only)")
+                            st.dataframe(df_done, use_container_width=True)
