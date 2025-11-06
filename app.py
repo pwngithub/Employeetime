@@ -458,6 +458,11 @@ elif page == "3️⃣ Admin":
                     else:
                         df = tasks.copy()
                         df["date"] = pd.to_datetime(df["date"], errors="coerce")
+
+                        # Ensure 'customer' exists even for old data
+                        if "customer" not in df.columns:
+                            df["customer"] = ""
+
                         df_done = df[df["duration_minutes"].notna()]
 
                         if df_done.empty:
