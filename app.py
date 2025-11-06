@@ -305,7 +305,7 @@ elif page == "3️⃣ Admin":
             "Admin users not configured in secrets.\n\n"
             "In Streamlit Cloud, go to 'Edit secrets' and add:\n\n"
             "[admin_users]\n"
-            "brian = \"yourPasswordHere\""
+            'brian = "yourPasswordHere"'
         )
     else:
         if "admin_authenticated" not in st.session_state:
@@ -401,24 +401,25 @@ elif page == "3️⃣ Admin":
                         emp_row = employees[employees["name"] == selected_name].iloc[0]
                         current_rate = float(emp_row["hourly_rate"])
                         current_role = emp_row["role"]
+                        emp_id = emp_row["employee_id"]
 
                         with st.form("edit_employee_form"):
                             new_name = st.text_input(
                                 "Name",
                                 value=selected_name,
-                                key="edit_name_input"
+                                key=f"edit_name_input_{emp_id}"
                             )
                             new_role = st.text_input(
                                 "Role",
                                 value=current_role,
-                                key="edit_role_input"
+                                key=f"edit_role_input_{emp_id}"
                             )
                             new_rate = st.number_input(
                                 "New Hourly Rate ($/hour)",
                                 min_value=0.0,
                                 step=0.5,
                                 value=current_rate,
-                                key="edit_rate_input"
+                                key=f"edit_rate_input_{emp_id}"
                             )
                             update = st.form_submit_button("Update Employee")
 
