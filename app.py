@@ -143,8 +143,10 @@ page = st.sidebar.radio(
         "2️⃣ Task List",
         "3️⃣ Employee Tasks",
         "4️⃣ Reports",
-    ]
+    ],
+    key="main_nav"
 )
+
 
 
 # -------------------------------
