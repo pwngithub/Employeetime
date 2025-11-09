@@ -5,6 +5,8 @@ from datetime import datetime
 import pytz
 import base64
 import requests
+from io import StringIO
+
 try:
     from google.oauth2.service_account import Credentials
     from googleapiclient.discovery import build
@@ -158,14 +160,30 @@ def write_task_to_github(task_data: dict):
         sha = None
         if response.status_code == 200:
             content_data = response.json()
+            if "content" not in content_data:
+                st.error("GitHub response missing 'content' field.")
+                st.write("Response:", content_data)
+                return False
             content = base64.b64decode(content_data["content"]).decode("utf-8")
-            df = pd.read_csv(pd.StringIO(content))
-            sha = content_data["sha"]
-            st.write(f"GitHub GET: File found, SHA: {sha}, Rows: {len(df)}")
+            st.write(f"GitHub GET: File found, SHA: {content_data.get('sha', 'N/A')}, Content length: {len(content)}")
+            if content.strip():
+                try:
+                    df = pd.read_csv(StringIO(content))
+                    if not all(col in df.columns for col in TASK_COLUMNS):
+                        st.warning(f"CSV columns mismatch. Expected: {TASK_COLUMNS}, Found: {list(df.columns)}")
+                        df = pd.DataFrame(columns=TASK_COLUMNS)
+                    sha = content_data["sha"]
+                except Exception as e:
+                    st.error(f"Failed to parse CSV content: {e}")
+                    st.write("Raw content:", content[:500])  # Show first 500 chars for debugging
+                    return False
+            else:
+                st.write("GitHub GET: File is empty, initializing new CSV.")
         elif response.status_code == 404:
             st.write("GitHub GET: File not found, creating new file.")
         else:
             st.error(f"GitHub GET failed (status {response.status_code}): {response.json().get('message', 'Unknown error')}")
+            st.write("Response:", response.json())
             return False
         # Append new task
         new_row = pd.DataFrame([task_data], columns=TASK_COLUMNS)
@@ -473,7 +491,7 @@ elif page == "3️⃣ Admin":
                 token = github_cfg.get("token")
                 repo = github_cfg.get("repo")
                 branch = github_cfg.get("branch", "main")
-                file_path = github_cfg.get("file_path", "Data/tasks.csv")
+                file_path = github_cfg.get("file_path", "data/tasks.csv")
                 if not all([token, repo, file_path]):
                     st.error(f"Missing GitHub configuration: token={bool(token)}, repo={bool(repo)}, file_path={bool(file_path)}")
                 else:
@@ -481,11 +499,25 @@ elif page == "3️⃣ Admin":
                     url = f"https://api.github.com/repos/{repo}/contents/{file_path}?ref={branch}"
                     response = requests.get(url, headers=headers)
                     if response.status_code == 200:
-                        content = base64.b64decode(response.json()["content"]).decode("utf-8")
-                        df = pd.read_csv(pd.StringIO(content))
-                        st.success(f"Connected to GitHub repo {repo}, file {file_path} (rows: {len(df)}).")
+                        content_data = response.json()
+                        if "content" not in content_data:
+                            st.error("GitHub response missing 'content' field.")
+                            st.write("Response:", content_data)
+                        else:
+                            content = base64.b64decode(content_data["content"]).decode("utf-8")
+                            st.write(f"GitHub GET: File found, Content length: {len(content)}")
+                            if content.strip():
+                                try:
+                                    df = pd.read_csv(StringIO(content))
+                                    st.success(f"Connected to GitHub repo {repo}, file {file_path} (rows: {len(df)}).")
+                                except Exception as e:
+                                    st.error(f"Failed to parse CSV: {e}")
+                                    st.write("Raw content (first 500 chars):", content[:500])
+                            else:
+                                st.success(f"Connected to GitHub repo {repo}, file {file_path} (empty file).")
                     else:
                         st.error(f"GitHub connection failed (status {response.status_code}): {response.json().get('message', 'Unknown error')}")
+                        st.write("Response:", response.json())
             # Debug and Test Write
             col1, col2 = st.columns(2)
             with col1:
