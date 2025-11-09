@@ -473,7 +473,7 @@ elif page == "3️⃣ Admin":
                 token = github_cfg.get("token")
                 repo = github_cfg.get("repo")
                 branch = github_cfg.get("branch", "main")
-                file_path = github_cfg.get("file_path", "data/tasks.csv")
+                file_path = github_cfg.get("file_path", "Data/tasks.csv")
                 if not all([token, repo, file_path]):
                     st.error(f"Missing GitHub configuration: token={bool(token)}, repo={bool(repo)}, file_path={bool(file_path)}")
                 else:
