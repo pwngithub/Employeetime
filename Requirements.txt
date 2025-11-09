@@ -1,6 +1,6 @@
 streamlit
 pandas
-gspread
+gspread 5.7.0
 google-oauth2-service-account
 pytz
 google-api-python-client
