@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
+from streamlit_gsheets import GSheetsConnection  # <-- NEW
 
 # -------------------------------
 # CONFIGURATION
@@ -12,11 +13,17 @@ st.set_page_config(
     layout="wide"
 )
 
+# --- NEW GOOGLE SHEETS CONNECTION ---
+# Use your sheet's URL
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1RVRUtL-y-F5e5KCqpdDQkN6voBIiGSvHjX_9fMNANqI/edit?usp=sharing" # <-- NEW
+conn = st.connection("gsheets", type=GSheetsConnection) # <-- NEW
+# ------------------------------------
+
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 
 EMPLOYEE_FILE = DATA_DIR / "employees.csv"
-TASKS_FILE = DATA_DIR / "tasks.csv"
+# TASKS_FILE = DATA_DIR / "tasks.csv"  # <-- REMOVED
 TASK_TYPES_FILE = DATA_DIR / "task_types.csv"
 
 # -------------------------------
@@ -48,6 +55,14 @@ def load_csv(path: Path, columns: list) -> pd.DataFrame:
 def save_csv(df: pd.DataFrame, path: Path):
     df.to_csv(path, index=False)
 
+
+# --- NEW FUNCTION ---
+def save_tasks(df: pd.DataFrame): # <-- NEW
+    """Saves the entire tasks dataframe to Google Sheets."""
+    # Use the 'Tasks' worksheet, and clear it before writing
+    # to ensure edits/deletions from the data_editor are saved.
+    conn.update(worksheet="Tasks", data=df)
+# --------------------
 
 def create_default_task_types() -> pd.DataFrame:
     """Default tasks including the sales pipeline steps."""
@@ -86,9 +101,35 @@ def get_task_types():
     return df
 
 
-@st.cache_data
+@st.cache_data(ttl=5)  # <-- MODIFIED (was get_tasks)
 def get_tasks():
-    return load_csv(TASKS_FILE, TASK_COLUMNS)
+    """Reads tasks from Google Sheet, ensures schema."""
+    try:
+        df = conn.read(
+            worksheet="Tasks",
+            usecols=list(range(len(TASK_COLUMNS))),
+            header=0
+        )
+        # GSheets can return all-None rows, drop them
+        df = df.dropna(how="all")
+    except Exception:
+        # Return empty frame if sheet is empty or error
+        return pd.DataFrame(columns=TASK_COLUMNS)
+
+    # Ensure all columns from TASK_COLUMNS exist
+    for col in TASK_COLUMNS:
+        if col not in df.columns:
+            df[col] = None
+    
+    # Return dataframe with correct column order
+    df = df[TASK_COLUMNS]
+    
+    # Coerce types (GSheets reads all as objects)
+    df['duration_minutes'] = pd.to_numeric(df['duration_minutes'], errors='coerce')
+    df['cost'] = pd.to_numeric(df['cost'], errors='coerce')
+    df['date'] = pd.to_datetime(df['date'], errors='coerce')
+
+    return df
 
 
 def refresh_employees_cache():
@@ -226,7 +267,7 @@ elif page == "2️⃣ Employee Tasks":
                         "cost": None,
                     }
                     tasks = pd.concat([tasks, pd.DataFrame([new_task])], ignore_index=True)
-                    save_csv(tasks, TASKS_FILE)
+                    save_tasks(tasks) # <-- MODIFIED
                     refresh_tasks_cache()
                     st.session_state["active_task_id"] = tid
                     st.success(
@@ -238,7 +279,7 @@ elif page == "2️⃣ Employee Tasks":
         # Active Task Panel
         st.subheader("Active Task")
         active_id = st.session_state["active_task_id"]
-        tasks = get_tasks()
+        tasks = get_tasks() # Get fresh data
 
         if not active_id:
             st.info("No active task running.")
@@ -276,7 +317,7 @@ elif page == "2️⃣ Employee Tasks":
                     tasks.loc[tasks["task_id"] == active_id, "end_time"] = end_dt.isoformat()
                     tasks.loc[tasks["task_id"] == active_id, "duration_minutes"] = minutes
                     tasks.loc[tasks["task_id"] == active_id, "cost"] = cost
-                    save_csv(tasks, TASKS_FILE)
+                    save_tasks(tasks) # <-- MODIFIED
                     refresh_tasks_cache()
                     st.session_state["active_task_id"] = None
 
@@ -645,7 +686,7 @@ elif page == "3️⃣ Admin":
                                     if delete_indices:
                                         df = df.drop(index=delete_indices)
 
-                                    save_csv(df[TASK_COLUMNS], TASKS_FILE)
+                                    save_tasks(df) # <-- MODIFIED
                                     refresh_tasks_cache()
 
                                     msg = "Changes saved."
