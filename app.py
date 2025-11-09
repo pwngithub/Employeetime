@@ -10,7 +10,10 @@ try:
     GSHEETS_AVAILABLE = True
 except ImportError:
     GSHEETS_AVAILABLE = False
-    st.warning("gspread library not installed. Google Sheets integration disabled.")
+    st.warning(
+        "gspread library not installed. Google Sheets integration disabled.\n\n"
+        "To enable, add 'gspread' to requirements.txt and redeploy, or run 'pip install gspread' locally."
+    )  # UPDATED: Clearer instructions
 # -------------------------------
 # CONFIGURATION
 # -------------------------------
@@ -82,7 +85,10 @@ def create_default_task_types() -> pd.DataFrame:
 def connect_gsheet():
     """Connects to Google Sheets using Streamlit Secrets."""
     if not GSHEETS_AVAILABLE:
-        st.warning("Google Sheets library (gspread) not installed.")
+        st.error(
+            "Cannot connect to Google Sheets: gspread library not installed.\n\n"
+            "Add 'gspread' to requirements.txt and redeploy, or run 'pip install gspread' locally."
+        )  # UPDATED: Stronger error message
         return None
     try:
         if "gcp_service_account" not in st.secrets:
@@ -341,7 +347,7 @@ elif page == "3️⃣ Admin":
             "Admin users not configured in secrets.\n\n"
             "In Streamlit Cloud, go to 'Edit secrets' and add:\n\n"
             "[admin_users]\n"
-            "brian = \"yourPasswordHere\""  # FIXED: Removed trailing \n
+            "brian = \"yourPasswordHere\""
         )
     else:
         if "admin_authenticated" not in st.session_state:
@@ -356,7 +362,7 @@ elif page == "3️⃣ Admin":
                 if login:
                     if username in admin_users and pw == admin_users[username]:
                         st.session_state["admin_authenticated"] = True
-                        st.session_state["admin_username"] = username
+                        st.session_state["admin_username"] = None
                         st.success(f"Welcome, {username}!")
                     else:
                         st.error("Invalid username or password.")
@@ -367,6 +373,11 @@ elif page == "3️⃣ Admin":
                 st.session_state["admin_username"] = None
                 st.rerun()
             st.subheader("Google Sheets Status")
+            if not GSHEETS_AVAILABLE:  # NEW: Persistent warning in Admin
+                st.error(
+                    "Google Sheets integration disabled: gspread library not installed.\n\n"
+                    "Add 'gspread' to requirements.txt and redeploy, or run 'pip install gspread' locally."
+                )
             if st.button("🔍 Test Google Sheets Connection"):
                 client = connect_gsheet()
                 if client:
