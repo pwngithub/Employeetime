@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
-import gspread  # <-- NEW
-from google.oauth2.service_account import Credentials  # <-- NEW
+import gspread  # --- NEW ---
+from google.oauth2.service_account import Credentials  # --- NEW ---
 
 # -------------------------------
 # CONFIGURATION
@@ -14,54 +14,12 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- NEW GSPREAD CONNECTION ---
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1RVRUtL-y-F5e5KCqpdDQkN6voBIiGSvHjX_9fMNANqI/edit?usp=sharing"
-
-@st.cache_resource
-def get_gspread_client():
-    """Create and cache the gspread client."""
-    creds = Credentials.from_service_account_info(
-        st.secrets["gcs"],  # Assumes your secrets are under [gcs] key
-        scopes=[
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive.file",
-        ],
-    )
-    client = gspread.authorize(creds)
-    return client
-
-@st.cache_data(ttl=10)
-def get_worksheet(worksheet_name: str) -> gspread.Worksheet:
-    """Get a specific worksheet from the Google Sheet."""
-    client = get_gspread_client()
-    try:
-        spreadsheet = client.open_by_url(SHEET_URL)
-        worksheet = spreadsheet.worksheet(worksheet_name)
-        return worksheet
-    except gspread.exceptions.WorksheetNotFound:
-        # If worksheet doesn't exist, create it with headers
-        spreadsheet = client.open_by_url(SHEET_URL)
-        if worksheet_name == "Tasks":
-            headers = TASK_COLUMNS
-        elif worksheet_name == "Employees":
-            headers = EMPLOYEE_COLUMNS
-        elif worksheet_name == "Task Types":
-            headers = TASK_TYPE_COLUMNS
-        else:
-            headers = []
-        
-        worksheet = spreadsheet.add_worksheet(title=worksheet_name, rows=1, cols=len(headers))
-        if headers:
-            worksheet.update([headers]) # Set headers in the first row
-        return worksheet
-# ------------------------------------
-
-# Note: DATA_DIR and file paths are no longer used for primary storage
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
-EMPLOYEE_FILE = DATA_DIR / "employees.csv"
-TASK_TYPES_FILE = DATA_DIR / "task_types.csv"
 
+EMPLOYEE_FILE = DATA_DIR / "employees.csv"
+TASKS_FILE = DATA_DIR / "tasks.csv"
+TASK_TYPES_FILE = DATA_DIR / "task_types.csv"
 
 # -------------------------------
 # CONSTANTS
@@ -71,7 +29,7 @@ TASK_TYPE_COLUMNS = ["task_type_id", "task_name", "category"]
 TASK_COLUMNS = [
     "task_id", "date", "employee_id", "employee_name",
     "task_type_id", "task_name", "task_category",
-    "customer",
+    "customer",  # customer / lead
     "task_description", "start_time", "end_time",
     "duration_minutes", "cost"
 ]
@@ -79,116 +37,130 @@ TASK_COLUMNS = [
 # -------------------------------
 # HELPERS
 # -------------------------------
-def gsheet_to_dataframe(worksheet: gspread.Worksheet, columns: list) -> pd.DataFrame:
-    """Read a worksheet into a DataFrame and ensure schema."""
-    try:
-        records = worksheet.get_all_records()
-        df = pd.DataFrame.from_records(records)
-    except Exception:
-        return pd.DataFrame(columns=columns)
-    
-    if df.empty:
-        return pd.DataFrame(columns=columns)
+def load_csv(path: Path, columns: list) -> pd.DataFrame:
+    if path.exists():
+        df = pd.read_csv(path)
+        for col in columns:
+            if col not in df.columns:
+                df[col] = None
+        return df[columns]
+    return pd.DataFrame(columns=columns)
 
-    # Ensure all columns from CONSTANTS exist
-    for col in columns:
-        if col not in df.columns:
-            df[col] = None
-    
-    df = df[columns] # Enforce column order
-    return df
 
-def dataframe_to_gsheet(df: pd.DataFrame, worksheet: gspread.Worksheet):
-    """Saves a DataFrame to a worksheet, overwriting all data."""
-    # gspread needs NaNs, Nones, etc. to be empty strings
-    df_clean = df.fillna("")
-    
-    # Convert datetimes back to iso strings for GSheets
-    for col in ['date', 'start_time', 'end_time']:
-        if col in df_clean.columns:
-            # Coerce to datetime, convert to iso, replace NaT with ""
-            df_clean[col] = pd.to_datetime(df_clean[col], errors='coerce').astype(str).replace("NaT", "").replace("None", "")
+def save_csv(df: pd.DataFrame, path: Path):
+    df.to_csv(path, index=False)
 
-    # Get all column headers
-    headers = df_clean.columns.tolist()
-    # Get all values as a list of lists
-    values = df_clean.values.tolist()
-    
-    worksheet.clear()
-    worksheet.update([headers] + values, value_input_option='USER_ENTERED')
 
 def create_default_task_types() -> pd.DataFrame:
     """Default tasks including the sales pipeline steps."""
     defaults = [
+        # Sales pipeline
         {"task_type_id": "TT_SALES_1", "task_name": "Sales – First Contact Reply", "category": "Sales"},
         {"task_type_id": "TT_SALES_2", "task_name": "Sales – Schedule Site Survey", "category": "Sales"},
         {"task_type_id": "TT_SALES_3", "task_name": "Sales – Record Site Survey Results", "category": "Sales"},
         {"task_type_id": "TT_SALES_4", "task_name": "Sales – Schedule Prep", "category": "Sales"},
         {"task_type_id": "TT_SALES_5", "task_name": "Sales – Schedule Install", "category": "Sales"},
+        # Construction examples
         {"task_type_id": "TT_OPS_1", "task_name": "Construction – Pull Fiber", "category": "Construction"},
         {"task_type_id": "TT_OPS_2", "task_name": "Construction – Lash Fiber", "category": "Construction"},
     ]
     return pd.DataFrame(defaults, columns=TASK_TYPE_COLUMNS)
 
+# -------------------------------
+# --- NEW: GOOGLE SHEETS HELPERS
+# -------------------------------
+
+@st.cache_resource
+def connect_gsheet():
+    """Connects to Google Sheets using Streamlit Secrets."""
+    try:
+        creds_dict = st.secrets["gcp_service_account"]
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        client = gspread.authorize(creds)
+        return client
+    except Exception as e:
+        st.error(f"GSheet Connection Error: {e}. Check secrets.toml.")
+        return None
+
+def write_task_to_gsheet(task_data: dict):
+    """Appends a single task (as a dict) to the configured Google Sheet."""
+    client = connect_gsheet()
+    if client is None:
+        st.warning("Google Sheets not connected. Skipping write.")
+        return
+
+    try:
+        # Get sheet details from secrets
+        sheet_name = st.secrets["google_sheet"]["sheet_name"]
+        worksheet_name = st.secrets["google_sheet"]["worksheet_name"]
+        
+        # Open the sheet and worksheet
+        sh = client.open(sheet_name)
+        ws = sh.worksheet(worksheet_name)
+        
+        # Get headers. If sheet is empty, add headers first.
+        headers = TASK_COLUMNS
+        all_vals = ws.get_all_values()
+        if not all_vals:
+            ws.append_row(headers, value_input_option="USER_ENTERED")
+
+        # Prepare the row data in the correct order defined by TASK_COLUMNS
+        # This maps the dict to an ordered list, filling missing values with ""
+        row_to_append = [str(task_data.get(col, "")) for col in headers]
+        
+        # Append the new task row
+        ws.append_row(row_to_append, value_input_option="USER_ENTERED")
+        
+    except Exception as e:
+        # Show a more specific error if the sheet or tab isn't found
+        if isinstance(e, gspread.exceptions.SpreadsheetNotFound):
+            st.error(f"GSheet Error: Spreadsheet '{sheet_name}' not found. Check name in secrets.toml or share settings.")
+        elif isinstance(e, gspread.exceptions.WorksheetNotFound):
+            st.error(f"GSheet Error: Worksheet '{worksheet_name}' not found in '{sheet_name}'. Check name in secrets.toml.")
+        else:
+            st.error(f"Failed to write to Google Sheet: {e}")
+
 
 # -------------------------------
 # DATA LOADERS (CACHED)
 # -------------------------------
-@st.cache_data(ttl=5)
+@st.cache_data
 def get_employees():
-    ws = get_worksheet("Employees")
-    df = gsheet_to_dataframe(ws, EMPLOYEE_COLUMNS)
-    df['hourly_rate'] = pd.to_numeric(df['hourly_rate'], errors='coerce')
-    return df
+    return load_csv(EMPLOYEE_FILE, EMPLOYEE_COLUMNS)
 
-@st.cache_data(ttl=5)
+
+@st.cache_data
 def get_task_types():
-    ws = get_worksheet("Task Types")
-    df = gsheet_to_dataframe(ws, TASK_TYPE_COLUMNS)
+    if not TASK_TYPES_FILE.exists():
+        df = create_default_task_types()
+        save_csv(df, TASK_TYPES_FILE)
+        return df
+    df = load_csv(TASK_TYPES_FILE, TASK_TYPE_COLUMNS)
     if df.empty:
         df = create_default_task_types()
-        dataframe_to_gsheet(df, ws) # Save defaults
+        save_csv(df, TASK_TYPES_FILE)
     return df
 
-@st.cache_data(ttl=5)
+
+@st.cache_data
 def get_tasks():
-    ws = get_worksheet("Tasks")
-    df = gsheet_to_dataframe(ws, TASK_COLUMNS)
-    
-    # Coerce types (GSheets reads all as objects)
-    df['duration_minutes'] = pd.to_numeric(df['duration_minutes'], errors='coerce')
-    df['cost'] = pd.to_numeric(df['cost'], errors='coerce')
-    df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    return df
+    return load_csv(TASKS_FILE, TASK_COLUMNS)
 
-# --- NEW SAVE FUNCTIONS ---
-def save_employees(df: pd.DataFrame):
-    ws = get_worksheet("Employees")
-    dataframe_to_gsheet(df, ws)
-    refresh_employees_cache()
-
-def save_task_types(df: pd.DataFrame):
-    ws = get_worksheet("Task Types")
-    dataframe_to_gsheet(df, ws)
-    refresh_task_types_cache()
-
-def save_tasks(df: pd.DataFrame):
-    ws = get_worksheet("Tasks")
-    dataframe_to_gsheet(df, ws)
-    refresh_tasks_cache()
-# --------------------------
 
 def refresh_employees_cache():
     get_employees.clear()
-    get_worksheet.clear()
+
 
 def refresh_task_types_cache():
     get_task_types.clear()
-    get_worksheet.clear()
+
 
 def refresh_tasks_cache():
     get_tasks.clear()
-    get_worksheet.clear()
 
 
 # -------------------------------
@@ -237,28 +209,23 @@ if page == "1️⃣ Task List":
             else:
                 if not task_type_id:
                     task_type_id = f"TT_{int(datetime.now().timestamp())}"
-                
-                # Get fresh data for modification
-                task_types_df = get_task_types()
-                
-                mask = task_types_df["task_type_id"] == task_type_id
+                mask = task_types["task_type_id"] == task_type_id
                 new_row = {
                     "task_type_id": task_type_id,
                     "task_name": task_name,
                     "category": category or "General",
                 }
                 if mask.any():
-                    task_types_df.loc[mask, new_row.keys()] = new_row.values()
+                    task_types.loc[mask, :] = new_row
                     st.success(f"Updated {task_name}.")
                 else:
-                    task_types_df = pd.concat(
-                        [task_types_df, pd.DataFrame([new_row])],
+                    task_types = pd.concat(
+                        [task_types, pd.DataFrame([new_row])],
                         ignore_index=True
                     )
                     st.success(f"Added {task_name}.")
-                
-                save_task_types(task_types_df) # <-- MODIFIED
-
+                save_csv(task_types, TASK_TYPES_FILE)
+                refresh_task_types_cache()
 
     st.subheader("Existing Tasks")
     st.dataframe(get_task_types(), use_container_width=True)
@@ -272,7 +239,8 @@ elif page == "2️⃣ Employee Tasks":
 
     employees = get_employees()
     task_types = get_task_types()
-    
+    tasks = get_tasks()
+
     if "active_task_id" not in st.session_state:
         st.session_state["active_task_id"] = None
 
@@ -317,82 +285,75 @@ elif page == "2️⃣ Employee Tasks":
                         "duration_minutes": None,
                         "cost": None,
                     }
-                    
-                    # Get fresh data, append, and save
-                    tasks = get_tasks()
                     tasks = pd.concat([tasks, pd.DataFrame([new_task])], ignore_index=True)
-                    save_tasks(tasks) # <-- MODIFIED
-                    
+                    save_csv(tasks, TASKS_FILE)
+                    refresh_tasks_cache()
                     st.session_state["active_task_id"] = tid
                     st.success(
                         f"Started '{tt['task_name']}' for {employee_name}"
                         + (f" (Customer: {customer})" if customer else "")
                         + f" at {start_time.strftime('%H:%M:%S')}"
                     )
-                    # No rerun, just let it flow to active panel
 
         # Active Task Panel
         st.subheader("Active Task")
         active_id = st.session_state["active_task_id"]
-        
+        tasks = get_tasks() # Re-get tasks to ensure we have the latest
+
         if not active_id:
             st.info("No active task running.")
         else:
-            tasks = get_tasks() # Get fresh data
             active = tasks[tasks["task_id"] == active_id]
-            
             if active.empty:
                 st.session_state["active_task_id"] = None
                 st.warning("Active task not found, resetting.")
             else:
                 row = active.iloc[0]
-                
-                # Handle potential string read from GSheet
-                start_time_str = str(row["start_time"])
-                if '.' in start_time_str:
-                    start_dt = datetime.fromisoformat(start_time_str.split('.')[0])
-                elif start_time_str != "None":
-                    try:
-                        start_dt = datetime.fromisoformat(start_time_str)
-                    except ValueError:
-                         st.error(f"Could not parse start time: {start_time_str}")
-                         st.session_state["active_task_id"] = None
-                         st.rerun()
+                start_dt = datetime.fromisoformat(str(row["start_time"]))
+                elapsed = datetime.now() - start_dt
+                elapsed_str = str(elapsed).split(".")[0]
 
-                
-                if start_time_str != "None":
-                    elapsed = datetime.now() - start_dt
-                    elapsed_str = str(elapsed).split(".")[0]
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.write(f"**Employee:** {row['employee_name']}")
+                    st.write(f"**Task:** {row['task_name']}")
+                    st.write(f"**Category:** {row['task_category']}")
+                with c2:
+                    st.write(f"**Started:** {row['start_time']}")
+                    st.write(f"**Elapsed:** {elapsed_str}")
+                    if row.get("customer"):
+                        st.write(f"**Customer:** {row['customer']}")
+                with c3:
+                    st.write("**Notes:**")
+                    st.write(row["task_description"])
 
-                    c1, c2, c3 = st.columns(3)
-                    with c1:
-                        st.write(f"**Employee:** {row['employee_name']}")
-                        st.write(f"**Task:** {row['task_name']}")
-                        st.write(f"**Category:** {row['task_category']}")
-                    with c2:
-                        st.write(f"**Started:** {start_dt.strftime('%Y-%m-%d %H:%M:%S')}")
-                        st.write(f"**Elapsed:** {elapsed_str}")
-                        if row.get("customer"):
-                            st.write(f"**Customer:** {row['customer']}")
-                    with c3:
-                        st.write("**Notes:**")
-                        st.write(row["task_description"])
+                if st.button("⏹️ Finish Task", key="finish_btn"):
+                    end_dt = datetime.now()
+                    emp = employees[employees["employee_id"] == row["employee_id"]].iloc[0]
+                    minutes = (end_dt - start_dt).total_seconds() / 60
+                    cost = round((minutes / 60) * float(emp["hourly_rate"]), 2)
 
-                    if st.button("⏹️ Finish Task", key="finish_btn"):
-                        end_dt = datetime.now()
-                        emp = employees[employees["employee_id"] == row["employee_id"]].iloc[0]
-                        minutes = (end_dt - start_dt).total_seconds() / 60
-                        cost = round((minutes / 60) * float(emp["hourly_rate"]), 2)
+                    # Update the DataFrame
+                    tasks.loc[tasks["task_id"] == active_id, "end_time"] = end_dt.isoformat()
+                    tasks.loc[tasks["task_id"] == active_id, "duration_minutes"] = minutes
+                    tasks.loc[tasks["task_id"] == active_id, "cost"] = cost
+                    
+                    # --- NEW: Get the completed task data ---
+                    completed_task_row = tasks[tasks["task_id"] == active_id].iloc[0]
+                    
+                    # --- NEW: Write to Google Sheets ---
+                    # This function will handle errors internally and show them in Streamlit
+                    write_task_to_gsheet(completed_task_row.to_dict())
 
-                        tasks.loc[tasks["task_id"] == active_id, "end_time"] = end_dt.isoformat()
-                        tasks.loc[tasks["task_id"] == active_id, "duration_minutes"] = minutes
-                        tasks.loc[tasks["task_id"] == active_id, "cost"] = cost
-                        
-                        save_tasks(tasks) # <-- MODIFIED
-                        
-                        st.session_state["active_task_id"] = None
-                        st.success(f"Task finished. Duration {minutes:.1f} minutes.")
-                        st.rerun() # Rerun to clear active panel
+                    # Save locally (as it was before)
+                    save_csv(tasks, TASKS_FILE)
+                    
+                    # Refresh cache and reset state
+                    refresh_tasks_cache()
+                    st.session_state["active_task_id"] = None
+
+                    st.success(f"Task finished. Duration {minutes:.1f} minutes. Logged to local CSV and Google Sheet.")
+                    st.rerun() # --- NEW: Rerun to clear the active panel
 
         # Task Log (cost hidden, but customer shown)
         st.subheader("Task Log")
@@ -401,8 +362,6 @@ elif page == "2️⃣ Employee Tasks":
             st.info("No tasks logged yet.")
         else:
             cols = [c for c in df.columns if c != "cost"]
-            # Ensure date is datetime for sorting
-            df['date'] = pd.to_datetime(df['date'], errors='coerce')
             st.dataframe(df[cols].sort_values("date", ascending=False), use_container_width=True)
 
 
@@ -438,7 +397,6 @@ elif page == "3️⃣ Admin":
                         st.session_state["admin_authenticated"] = True
                         st.session_state["admin_username"] = username
                         st.success(f"Welcome, {username}!")
-                        st.rerun()
                     else:
                         st.error("Invalid username or password.")
         else:
@@ -458,6 +416,8 @@ elif page == "3️⃣ Admin":
                 # ----- ADMIN: EMPLOYEES -----
                 if section == "Employees":
                     st.header("Manage Employees")
+
+                    employees = get_employees()
 
                     st.subheader("Add / Update Employee")
                     with st.form("admin_employee_form", clear_on_submit=True):
@@ -480,9 +440,6 @@ elif page == "3️⃣ Admin":
                             else:
                                 if not employee_id:
                                     employee_id = f"E{int(datetime.now().timestamp())}"
-                                
-                                employees = get_employees() # Get fresh data
-                                
                                 mask = employees["employee_id"] == employee_id
                                 new_row = {
                                     "employee_id": employee_id,
@@ -491,7 +448,7 @@ elif page == "3️⃣ Admin":
                                     "hourly_rate": hourly_rate,
                                 }
                                 if mask.any():
-                                    employees.loc[mask, new_row.keys()] = new_row.values()
+                                    employees.loc[mask, :] = new_row
                                     st.success(f"Updated employee {name}.")
                                 else:
                                     employees = pd.concat(
@@ -499,8 +456,8 @@ elif page == "3️⃣ Admin":
                                         ignore_index=True
                                     )
                                     st.success(f"Added employee {name}.")
-                                
-                                save_employees(employees) # <-- MODIFIED
+                                save_csv(employees, EMPLOYEE_FILE)
+                                refresh_employees_cache()
 
                     st.subheader("Edit Existing Employee")
                     employees = get_employees()
@@ -513,46 +470,42 @@ elif page == "3️⃣ Admin":
                             options=emp_names,
                             key="edit_emp_select"
                         )
-                        
-                        if selected_name:
-                            emp_row = employees[employees["name"] == selected_name].iloc[0]
-                            current_rate = float(emp_row["hourly_rate"])
-                            current_role = emp_row["role"]
-                            emp_id = emp_row["employee_id"]
+                        emp_row = employees[employees["name"] == selected_name].iloc[0]
+                        current_rate = float(emp_row["hourly_rate"])
+                        current_role = emp_row["role"]
+                        emp_id = emp_row["employee_id"]
 
-                            with st.form("edit_employee_form"):
-                                new_name = st.text_input(
-                                    "Name",
-                                    value=selected_name,
-                                    key=f"edit_name_input_{emp_id}"
-                                )
-                                new_role = st.text_input(
-                                    "Role",
-                                    value=current_role,
-                                    key=f"edit_role_input_{emp_id}"
-                                )
-                                new_rate = st.number_input(
-                                    "New Hourly Rate ($/hour)",
-                                    min_value=0.0,
-                                    step=0.5,
-                                    value=current_rate,
-                                    key=f"edit_rate_input_{emp_id}"
-                                )
-                                update = st.form_submit_button("Update Employee")
+                        with st.form("edit_employee_form"):
+                            new_name = st.text_input(
+                                "Name",
+                                value=selected_name,
+                                key=f"edit_name_input_{emp_id}"
+                            )
+                            new_role = st.text_input(
+                                "Role",
+                                value=current_role,
+                                key=f"edit_role_input_{emp_id}"
+                            )
+                            new_rate = st.number_input(
+                                "New Hourly Rate ($/hour)",
+                                min_value=0.0,
+                                step=0.5,
+                                value=current_rate,
+                                key=f"edit_rate_input_{emp_id}"
+                            )
+                            update = st.form_submit_button("Update Employee")
 
-                                if update:
-                                    employees.loc[
-                                        employees["employee_id"] == emp_row["employee_id"],
-                                        ["name", "role", "hourly_rate"]
-                                    ] = [new_name, new_role, new_rate]
-                                    
-                                    save_employees(employees) # <-- MODIFIED
-                                    
-                                    st.success(
-                                        f"Updated employee: '{selected_name}' → '{new_name}', "
-                                        f"role='{new_role}', hourly rate=${new_rate:.2f}"
-                                    )
-                                    st.rerun()
+                            if update:
+                                employees.loc[
+                                    employees["employee_id"] == emp_row["employee_id"],
+                                    ["name", "role", "hourly_rate"]
+                                ] = [new_name, new_role, new_rate]
+                                save_csv(employees, EMPLOYEE_FILE)
+                                refresh_employees_cache()
+                                st.success(
+                                    f"Updated employee: '{selected_name}' → '{new_name}', "
+                                    f"role='{new_role}', hourly rate=${new_rate:.2f}"
+                                )
 
                     st.subheader("Current Employees")
                     employees = get_employees()
@@ -572,6 +525,7 @@ elif page == "3️⃣ Admin":
                         df = tasks.copy()
                         df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
+                        # Ensure 'customer' exists even for old data
                         if "customer" not in df.columns:
                             df["customer"] = ""
 
@@ -583,16 +537,14 @@ elif page == "3️⃣ Admin":
                             # Filters
                             c1, c2, c3 = st.columns(3)
                             with c1:
-                                min_date = df_done["date"].min()
                                 start_date = st.date_input(
                                     "Start date",
-                                    value=min_date.date() if pd.notna(min_date) else datetime.now().date()
+                                    value=df_done["date"].min().date()
                                 )
                             with c2:
-                                max_date = df_done["date"].max()
                                 end_date = st.date_input(
                                     "End date",
-                                    value=max_date.date() if pd.notna(max_date) else datetime.now().date()
+                                    value=df_done["date"].max().date()
                                 )
                             with c3:
                                 customer_filter = st.text_input(
@@ -619,6 +571,7 @@ elif page == "3️⃣ Admin":
                                 total_minutes = df_filtered["duration_minutes"].fillna(0).sum()
                                 total_hours = round(total_minutes / 60.0, 2)
                                 total_cost = float(df_filtered["cost"].fillna(0).sum())
+                                # count only non-empty customers
                                 cust_series = df_filtered["customer"].fillna("").astype(str).str.strip()
                                 unique_customers = cust_series.replace("", pd.NA).nunique()
 
@@ -689,27 +642,35 @@ elif page == "3️⃣ Admin":
                                 # -------- Editable Raw Data (with Delete) --------
                                 st.subheader("Raw Task Data (Admin Only – Edit or Delete)")
 
+                                # Start from filtered df (with original indices preserved)
                                 edit_df = df_filtered.copy()
 
+                                # Add a delete column (default False)
                                 if "delete" not in edit_df.columns:
                                     edit_df["delete"] = False
                                 else:
-                                    edit_df["delete"] = edit_df["delete"].fillna(False).astype(bool)
-                                
-                                # Convert date for data_editor
-                                edit_df['date'] = pd.to_datetime(edit_df['date']).dt.date
-
+                                    edit_df["delete"] = edit_df["delete"].fillna(False)
 
                                 hidden_cols = ["task_id", "employee_id", "task_type_id"]
                                 all_cols = edit_df.columns.tolist()
+
+                                # Show 'delete' first, then everything except hidden + delete
                                 visible_cols = ["delete"] + [
                                     c for c in all_cols if c not in hidden_cols + ["delete"]
                                 ]
 
+                                # Columns admin is allowed to edit
                                 editable_cols = [
-                                    "date", "employee_name", "task_name", "task_category",
-                                    "customer", "task_description", "start_time", "end_time",
-                                    "duration_minutes", "delete"
+                                    "date",
+                                    "employee_name",
+                                    "task_name",
+                                    "task_category",
+                                    "customer",
+                                    "task_description",
+                                    "start_time",
+                                    "end_time",
+                                    "duration_minutes",
+                                    "delete",
                                 ]
 
                                 edited_df = st.data_editor(
@@ -720,59 +681,51 @@ elif page == "3️⃣ Admin":
                                         c for c in visible_cols if c not in editable_cols
                                     ],
                                     key="raw_task_editor",
-                                    column_config={"date": st.column_config.DateColumn()}
                                 )
 
                                 if st.button("💾 Save Task Changes", key="save_task_changes"):
                                     employees_all = get_employees()
-                                    
-                                    # Get the full, fresh tasks dataframe from GSheets
-                                    all_tasks_df = get_tasks()
-                                    
-                                    delete_ids = []
-                                    updates = 0
+                                    delete_indices = []
 
-                                    # Iterate over the edited dataframe
-                                    for _, row in edited_df.iterrows():
-                                        task_id_to_find = row['task_id']
-                                        
+                                    # df_filtered.index are the original row indices in df
+                                    for orig_idx, (_, row) in zip(df_filtered.index, edited_df.iterrows()):
+                                        # handle delete
                                         if bool(row.get("delete", False)):
-                                            delete_ids.append(task_id_to_find)
+                                            delete_indices.append(orig_idx)
                                             continue
 
-                                        # Find the row in the *full* dataframe
-                                        mask = all_tasks_df["task_id"] == task_id_to_find
-                                        if mask.any():
-                                            updates += 1
-                                            # Update editable fields
-                                            for col in editable_cols:
-                                                if col == "delete":
-                                                    continue
-                                                if col in all_tasks_df.columns:
-                                                    all_tasks_df.loc[mask, col] = row[col]
+                                        # update editable fields
+                                        for col in editable_cols:
+                                            if col == "delete":
+                                                continue
+                                            if col in df.columns and col in edited_df.columns:
+                                                df.loc[orig_idx, col] = row[col]
 
-                                            # Recalculate cost
-                                            try:
-                                                duration = row.get("duration_minutes", None)
-                                                if pd.notna(duration):
-                                                    emp_name = row.get("employee_name", None)
-                                                    emp_row = employees_all[employees_all["name"] == emp_name]
-                                                    if not emp_row.empty:
-                                                        rate = float(emp_row.iloc[0]["hourly_rate"])
-                                                        hours = float(duration) / 60.0
-                                                        all_tasks_df.loc[mask, "cost"] = round(hours * rate, 2)
-                                            except Exception:
-                                                pass # cost recalc failed, leave as is
+                                        # recalc cost if possible
+                                        try:
+                                            duration = row.get("duration_minutes", None)
+                                            if pd.notna(duration):
+                                                emp_name = row.get("employee_name", None)
+                                                emp_row = employees_all[employees_all["name"] == emp_name]
+                                                if not emp_row.empty:
+                                                    rate = float(emp_row.iloc[0]["hourly_rate"])
+                                                    hours = float(duration) / 60.0
+                                                    df.loc[orig_idx, "cost"] = round(hours * rate, 2)
+                                        except Exception:
+                                            pass
 
-                                    # After iterating, drop all rows marked for deletion
-                                    if delete_ids:
-                                        all_tasks_df = all_tasks_df[~all_tasks_df["task_id"].isin(delete_ids)]
+                                    # delete rows if needed
+                                    if delete_indices:
+                                        df = df.drop(index=delete_indices)
+                                    
+                                    # --- NEW: We don't write edits to GSheet, only new tasks.
+                                    # But we do save deletions/edits to the local CSV.
+                                    save_csv(df[TASK_COLUMNS], TASKS_FILE)
+                                    refresh_tasks_cache()
 
-                                    # Save the modified *full* dataframe back to GSheets
-                                    save_tasks(all_tasks_df) # <-- MODIFIED
-
-                                    msg = f"Changes saved. {updates} task(s) updated."
-                                    if delete_ids:
-                                        msg += f" {len(delete_ids)} task(s) deleted."
+                                    msg = "Changes saved locally."
+                                    if delete_indices:
+                                        msg += f" Deleted {len(delete_indices)} task(s)."
                                     st.success(msg)
-                                    st.rerun()
+                                    st.warning("Note: Edits/Deletions here do not affect Google Sheets, which is append-only.")
+                                    st.rerun() # --- NEW
