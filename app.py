@@ -104,7 +104,7 @@ def connect_gsheet_api():
         st.error(f"Google Sheets API Connection Error: {e}")
         return None
 
-def write_task_to_gsheet_api(tasks: list):
+def write_task_to_gsheet_api(task_data: dict):
     service = connect_gsheet_api()
     if not service:
         return False
@@ -123,15 +123,15 @@ def write_task_to_gsheet_api(tasks: list):
                 valueInputOption="USER_ENTERED",
                 body={"values": [TASK_COLUMNS]},
             ).execute()
-        # Append tasks
-        rows = [[str(task.get(col, "")) for col in TASK_COLUMNS] for task in tasks]
+        # Append task
+        row = [str(task_data.get(col, "")) for col in TASK_COLUMNS]
         service.spreadsheets().values().append(
             spreadsheetId=sheet_id,
             range=f"{worksheet_name}!A1",
             valueInputOption="USER_ENTERED",
-            body={"values": rows},
+            body={"values": [row]},
         ).execute()
-        st.success(f"Appended {len(tasks)} tasks to Google Sheet (Worksheet: {worksheet_name}).")
+        st.success(f"Appended task to Google Sheet (Worksheet: {worksheet_name}).")
         return True
     except Exception as e:
         st.error(f"Failed to write to Google Sheet: {e}")
@@ -140,7 +140,7 @@ def write_task_to_gsheet_api(tasks: list):
 # -------------------------------
 # GITHUB CSV HELPERS
 # -------------------------------
-def write_task_to_github(tasks: list):
+def write_task_to_github(task_data: dict):
     try:
         github_cfg = st.secrets.get("github", {})
         token = github_cfg.get("token")
@@ -151,52 +151,54 @@ def write_task_to_github(tasks: list):
             st.error("Missing GitHub configuration in Streamlit secrets (token, repo, file_path).")
             return False
         # Get current file content
-        headers = {"Authorization": f"token {token}"}
+        headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
         url = f"https://api.github.com/repos/{repo}/contents/{file_path}?ref={branch}"
         response = requests.get(url, headers=headers)
         df = pd.DataFrame(columns=TASK_COLUMNS)
+        sha = None
         if response.status_code == 200:
-            content = base64.b64decode(response.json()["content"]).decode("utf-8")
+            content_data = response.json()
+            content = base64.b64decode(content_data["content"]).decode("utf-8")
             df = pd.read_csv(pd.StringIO(content))
-        # Append new tasks
-        new_rows = pd.DataFrame(tasks, columns=TASK_COLUMNS)
-        df = pd.concat([df, new_rows], ignore_index=True)
+            sha = content_data["sha"]
+        else:
+            if response.status_code != 404:
+                st.error(f"GitHub GET error (status {response.status_code}): {response.json().get('message', 'Unknown error')}")
+                return False
+        # Append new task
+        new_row = pd.DataFrame([task_data], columns=TASK_COLUMNS)
+        df = pd.concat([df, new_row], ignore_index=True)
         # Encode updated content
         content = df.to_csv(index=False).encode("utf-8")
         encoded_content = base64.b64encode(content).decode("utf-8")
         # Update file
         data = {
-            "message": f"Append {len(tasks)} tasks to {file_path}",
+            "message": f"Append task {task_data.get('task_id', 'unknown')} to {file_path}",
             "content": encoded_content,
             "branch": branch,
         }
-        if response.status_code == 200:
-            data["sha"] = response.json()["sha"]
+        if sha:
+            data["sha"] = sha
         response = requests.put(url, headers=headers, json=data)
         if response.status_code in [200, 201]:
-            st.success(f"Appended {len(tasks)} tasks to GitHub CSV ({file_path}).")
+            st.success(f"Appended task {task_data.get('task_id', 'unknown')} to GitHub CSV ({file_path}).")
             return True
         else:
-            st.error(f"Failed to update GitHub CSV: {response.json().get('message', 'Unknown error')}")
+            error_msg = response.json().get('message', 'Unknown error')
+            st.error(f"GitHub PUT error (status {response.status_code}): {error_msg}")
             return False
     except Exception as e:
         st.error(f"GitHub CSV write error: {e}")
         return False
 
 def write_task_to_storage(task_data: dict):
-    if "pending_tasks" not in st.session_state:
-        st.session_state.pending_tasks = []
-    st.session_state.pending_tasks.append(task_data)
-    if len(st.session_state.pending_tasks) >= 5:  # Batch every 5 tasks
-        success = False
-        if GSHEETS_AVAILABLE:
-            success = write_task_to_gsheet_api(st.session_state.pending_tasks)
-        if not success:
-            success = write_task_to_github(st.session_state.pending_tasks)
-        if success:
-            st.session_state.pending_tasks = []
-        else:
-            st.error("Failed to write to both Google Sheets and GitHub CSV. Tasks saved locally.")
+    success = False
+    if GSHEETS_AVAILABLE:
+        success = write_task_to_gsheet_api(task_data)
+    if not success:
+        success = write_task_to_github(task_data)
+    if not success:
+        st.error("Failed to write to both Google Sheets and GitHub CSV. Task saved locally.")
 
 # -------------------------------
 # DATA LOADERS (CACHED)
@@ -467,13 +469,31 @@ elif page == "3️⃣ Admin":
                 if not all([token, repo, file_path]):
                     st.error("Missing GitHub configuration in secrets.")
                 else:
-                    headers = {"Authorization": f"token {token}"}
+                    headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
                     url = f"https://api.github.com/repos/{repo}/contents/{file_path}?ref={branch}"
                     response = requests.get(url, headers=headers)
                     if response.status_code == 200:
-                        st.success(f"Connected to GitHub repo {repo}, file {file_path}.")
+                        st.success(f"Connected to GitHub repo {repo}, file {file_path} (rows: {len(pd.read_csv(pd.StringIO(base64.b64decode(response.json()['content']).decode('utf-8'))))} estimated).")
                     else:
-                        st.error(f"GitHub connection failed: {response.json().get('message', 'Unknown error')}")
+                        st.error(f"GitHub connection failed (status {response.status_code}): {response.json().get('message', 'Unknown error')}")
+            # NEW: Debug buttons for GitHub
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🔧 Debug Pending Tasks"):
+                    pending = st.session_state.get("pending_tasks", [])
+                    st.write(f"Pending tasks: {len(pending)}")
+                    if pending:
+                        st.json(pending[-1])  # Show last pending task
+            with col2:
+                if st.button("💾 Force Flush to GitHub"):
+                    pending = st.session_state.get("pending_tasks", [])
+                    if pending:
+                        success = write_task_to_github(pending[-1])  # Flush last one for test
+                        if success:
+                            st.session_state.pending_tasks = []
+                        st.rerun()
+                    else:
+                        st.info("No pending tasks to flush.")
             if st.session_state["admin_authenticated"]:
                 section = st.radio(
                     "Admin Section",
