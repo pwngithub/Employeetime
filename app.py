@@ -32,7 +32,7 @@ TASK_COLUMNS = [
     "task_type_id",
     "task_name",
     "task_category",
-    "customer",  # customer / lead
+    "customer",
     "task_description",
     "start_time",
     "end_time",
@@ -91,41 +91,13 @@ def save_csv(df: pd.DataFrame, path: Path):
 def create_default_task_types() -> pd.DataFrame:
     """Default tasks including the sales pipeline steps."""
     defaults = [
-        {
-            "task_type_id": "TT_SALES_1",
-            "task_name": "Sales – First Contact Reply",
-            "category": "Sales",
-        },
-        {
-            "task_type_id": "TT_SALES_2",
-            "task_name": "Sales – Schedule Site Survey",
-            "category": "Sales",
-        },
-        {
-            "task_type_id": "TT_SALES_3",
-            "task_name": "Sales – Record Site Survey Results",
-            "category": "Sales",
-        },
-        {
-            "task_type_id": "TT_SALES_4",
-            "task_name": "Sales – Schedule Prep",
-            "category": "Sales",
-        },
-        {
-            "task_type_id": "TT_SALES_5",
-            "task_name": "Sales – Schedule Install",
-            "category": "Sales",
-        },
-        {
-            "task_type_id": "TT_OPS_1",
-            "task_name": "Construction – Pull Fiber",
-            "category": "Construction",
-        },
-        {
-            "task_type_id": "TT_OPS_2",
-            "task_name": "Construction – Lash Fiber",
-            "category": "Construction",
-        },
+        {"task_type_id": "TT_SALES_1", "task_name": "Sales – First Contact Reply", "category": "Sales"},
+        {"task_type_id": "TT_SALES_2", "task_name": "Sales – Schedule Site Survey", "category": "Sales"},
+        {"task_type_id": "TT_SALES_3", "task_name": "Sales – Record Site Survey Results", "category": "Sales"},
+        {"task_type_id": "TT_SALES_4", "task_name": "Sales – Schedule Prep", "category": "Sales"},
+        {"task_type_id": "TT_SALES_5", "task_name": "Sales – Schedule Install", "category": "Sales"},
+        {"task_type_id": "TT_OPS_1", "task_name": "Construction – Pull Fiber", "category": "Construction"},
+        {"task_type_id": "TT_OPS_2", "task_name": "Construction – Lash Fiber", "category": "Construction"},
     ]
     return pd.DataFrame(defaults, columns=TASK_TYPE_COLUMNS)
 
@@ -524,5 +496,14 @@ elif page == "3️⃣ Admin":
                         df = tasks.copy()
                         df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
+                        # 🔴 IMPORTANT: keep this EXACTLY on a single line:
                         if "customer" not in df.columns:
-                            df["cu
+                            df["customer"] = ""
+
+                        df_done = df[df["duration_minutes"].notna()]
+
+                        if df_done.empty:
+                            st.info("No completed tasks yet.")
+                        else:
+                            # Filters
+              
