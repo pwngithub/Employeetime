@@ -496,7 +496,6 @@ elif page == "3️⃣ Admin":
                         df = tasks.copy()
                         df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
-                        # 🔴 IMPORTANT: keep this EXACTLY on a single line:
                         if "customer" not in df.columns:
                             df["customer"] = ""
 
@@ -506,4 +505,5 @@ elif page == "3️⃣ Admin":
                             st.info("No completed tasks yet.")
                         else:
                             # Filters
-              
+                            c1, c2, c3 = st.columns(3)
+                            with c1
