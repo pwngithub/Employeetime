@@ -2,8 +2,6 @@ import streamlit as st
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
-import gspread  # --- NEW ---
-from google.oauth2.service_account import Credentials  # --- NEW ---
 
 # -------------------------------
 # CONFIGURATION
@@ -65,64 +63,6 @@ def create_default_task_types() -> pd.DataFrame:
         {"task_type_id": "TT_OPS_2", "task_name": "Construction – Lash Fiber", "category": "Construction"},
     ]
     return pd.DataFrame(defaults, columns=TASK_TYPE_COLUMNS)
-
-# -------------------------------
-# --- NEW: GOOGLE SHEETS HELPERS
-# -------------------------------
-
-@st.cache_resource
-def connect_gsheet():
-    """Connects to Google Sheets using Streamlit Secrets."""
-    try:
-        creds_dict = st.secrets["gcp_service_account"]
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        client = gspread.authorize(creds)
-        return client
-    except Exception as e:
-        st.error(f"GSheet Connection Error: {e}. Check secrets.toml.")
-        return None
-
-def write_task_to_gsheet(task_data: dict):
-    """Appends a single task (as a dict) to the configured Google Sheet."""
-    client = connect_gsheet()
-    if client is None:
-        st.warning("Google Sheets not connected. Skipping write.")
-        return
-
-    try:
-        # Get sheet details from secrets
-        sheet_name = st.secrets["google_sheet"]["sheet_name"]
-        worksheet_name = st.secrets["google_sheet"]["worksheet_name"]
-        
-        # Open the sheet and worksheet
-        sh = client.open(sheet_name)
-        ws = sh.worksheet(worksheet_name)
-        
-        # Get headers. If sheet is empty, add headers first.
-        headers = TASK_COLUMNS
-        all_vals = ws.get_all_values()
-        if not all_vals:
-            ws.append_row(headers, value_input_option="USER_ENTERED")
-
-        # Prepare the row data in the correct order defined by TASK_COLUMNS
-        # This maps the dict to an ordered list, filling missing values with ""
-        row_to_append = [str(task_data.get(col, "")) for col in headers]
-        
-        # Append the new task row
-        ws.append_row(row_to_append, value_input_option="USER_ENTERED")
-        
-    except Exception as e:
-        # Show a more specific error if the sheet or tab isn't found
-        if isinstance(e, gspread.exceptions.SpreadsheetNotFound):
-            st.error(f"GSheet Error: Spreadsheet '{sheet_name}' not found. Check name in secrets.toml or share settings.")
-        elif isinstance(e, gspread.exceptions.WorksheetNotFound):
-            st.error(f"GSheet Error: Worksheet '{worksheet_name}' not found in '{sheet_name}'. Check name in secrets.toml.")
-        else:
-            st.error(f"Failed to write to Google Sheet: {e}")
 
 
 # -------------------------------
@@ -298,7 +238,7 @@ elif page == "2️⃣ Employee Tasks":
         # Active Task Panel
         st.subheader("Active Task")
         active_id = st.session_state["active_task_id"]
-        tasks = get_tasks() # Re-get tasks to ensure we have the latest
+        tasks = get_tasks()
 
         if not active_id:
             st.info("No active task running.")
@@ -333,27 +273,14 @@ elif page == "2️⃣ Employee Tasks":
                     minutes = (end_dt - start_dt).total_seconds() / 60
                     cost = round((minutes / 60) * float(emp["hourly_rate"]), 2)
 
-                    # Update the DataFrame
                     tasks.loc[tasks["task_id"] == active_id, "end_time"] = end_dt.isoformat()
                     tasks.loc[tasks["task_id"] == active_id, "duration_minutes"] = minutes
                     tasks.loc[tasks["task_id"] == active_id, "cost"] = cost
-                    
-                    # --- NEW: Get the completed task data ---
-                    completed_task_row = tasks[tasks["task_id"] == active_id].iloc[0]
-                    
-                    # --- NEW: Write to Google Sheets ---
-                    # This function will handle errors internally and show them in Streamlit
-                    write_task_to_gsheet(completed_task_row.to_dict())
-
-                    # Save locally (as it was before)
                     save_csv(tasks, TASKS_FILE)
-                    
-                    # Refresh cache and reset state
                     refresh_tasks_cache()
                     st.session_state["active_task_id"] = None
 
-                    st.success(f"Task finished. Duration {minutes:.1f} minutes. Logged to local CSV and Google Sheet.")
-                    st.rerun() # --- NEW: Rerun to clear the active panel
+                    st.success(f"Task finished. Duration {minutes:.1f} minutes.")
 
         # Task Log (cost hidden, but customer shown)
         st.subheader("Task Log")
@@ -717,15 +644,11 @@ elif page == "3️⃣ Admin":
                                     # delete rows if needed
                                     if delete_indices:
                                         df = df.drop(index=delete_indices)
-                                    
-                                    # --- NEW: We don't write edits to GSheet, only new tasks.
-                                    # But we do save deletions/edits to the local CSV.
+
                                     save_csv(df[TASK_COLUMNS], TASKS_FILE)
                                     refresh_tasks_cache()
 
-                                    msg = "Changes saved locally."
+                                    msg = "Changes saved."
                                     if delete_indices:
                                         msg += f" Deleted {len(delete_indices)} task(s)."
                                     st.success(msg)
-                                    st.warning("Note: Edits/Deletions here do not affect Google Sheets, which is append-only.")
-                                    st.rerun() # --- NEW
