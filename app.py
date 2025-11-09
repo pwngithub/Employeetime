@@ -374,7 +374,7 @@ elif page == "2️⃣ Employee Tasks":
                         f"Task finished. Duration {minutes:.1f} minutes. "
                         "Logged to local CSV and Google Sheet (if configured)."
                     )
-                    st.experimental_rerun()
+                    st.rerun()
 
         # Task Log (cost hidden)
         st.subheader("Task Log")
@@ -424,7 +424,7 @@ elif page == "3️⃣ Admin":
             if st.button("Logout", key="admin_logout"):
                 st.session_state["admin_authenticated"] = False
                 st.session_state["admin_username"] = None
-                st.experimental_rerun()
+                st.rerun()
 
             if st.session_state["admin_authenticated"]:
                 section = st.radio(
@@ -751,4 +751,4 @@ elif page == "3️⃣ Admin":
                                         "Note: Edits/Deletions here do not affect Google Sheets, "
                                         "which is append-only."
                                     )
-                                    st.experimental_rerun()
+                                    st.rerun()
