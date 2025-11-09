@@ -3,3 +3,7 @@ pandas
 gspread
 google-oauth2-service-account
 pytz
+google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
