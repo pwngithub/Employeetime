@@ -551,4 +551,123 @@ elif page == "3️⃣ Admin":
                                 by_customer = cust_df.groupby("customer").agg(
                                     total_hours=(
                                         "duration_minutes",
-                                        lambda
+                                        lambda x: round(x.sum() / 60, 2),
+                                    ),
+                                    total_cost=("cost", "sum"),
+                                    tasks=("task_id", "count"),
+                                ).reset_index()
+                                st.dataframe(by_customer, use_container_width=True)
+                                selected_customer = st.selectbox(
+                                    "View KPIs for a single customer",
+                                    options=["All"] + sorted(by_customer["customer"].tolist()),
+                                    index=0,
+                                    key="customer_kpi_select",
+                                )
+                                if selected_customer != "All":
+                                    row = by_customer[
+                                        by_customer["customer"] == selected_customer
+                                    ].iloc[0]
+                                    kc1, kc2, kc3 = st.columns(3)
+                                    with kc1:
+                                        st.metric("Customer", selected_customer)
+                                    with kc2:
+                                        st.metric("Total Hours", f"{row['total_hours']:.2f}")
+                                    with kc3:
+                                        st.metric("Total Cost", f"${row['total_cost']:.2f}")
+                                st.markdown("---")
+                                st.subheader("Summary by Employee")
+                                emp = df_filtered.groupby("employee_name").agg(
+                                    total_hours=(
+                                        "duration_minutes",
+                                        lambda x: round(x.sum() / 60, 2),
+                                    ),
+                                    total_cost=("cost", "sum"),
+                                    tasks=("task_id", "count"),
+                                ).reset_index()
+                                st.dataframe(emp, use_container_width=True)
+                                st.subheader("Summary by Task")
+                                t = df_filtered.groupby(
+                                    ["task_name", "task_category"]
+                                ).agg(
+                                    total_hours=(
+                                        "duration_minutes",
+                                        lambda x: round(x.sum() / 60, 2),
+                                    ),
+                                    total_cost=("cost", "sum"),
+                                    tasks=("task_id", "count"),
+                                ).reset_index()
+                                st.dataframe(t, use_container_width=True)
+                                st.subheader("Raw Task Data (Admin Only – Edit or Delete)")
+                                edit_df = df_filtered.copy()
+                                if "delete" not in edit_df.columns:
+                                    edit_df["delete"] = False
+                                else:
+                                    edit_df["delete"] = edit_df["delete"].fillna(False)
+                                hidden_cols = ["task_id", "employee_id", "task_type_id"]
+                                all_cols = edit_df.columns.tolist()
+                                visible_cols = ["delete"] + [
+                                    c for c in all_cols if c not in hidden_cols + ["delete"]
+                                ]
+                                editable_cols = [
+                                    "date",
+                                    "employee_name",
+                                    "task_name",
+                                    "task_category",
+                                    "customer",
+                                    "task_description",
+                                    "start_time",
+                                    "end_time",
+                                    "duration_minutes",
+                                    "delete",
+                                ]
+                                edited_df = st.data_editor(
+                                    edit_df[visible_cols],
+                                    use_container_width=True,
+                                    num_rows="fixed",
+                                    disabled=[
+                                        c for c in visible_cols if c not in editable_cols
+                                    ],
+                                    key="raw_task_editor",
+                                )
+                                if st.button("💾 Save Task Changes", key="save_task_changes"):
+                                    employees_all = get_employees()
+                                    delete_indices = []
+                                    for orig_idx, (_, row) in zip(
+                                        df_filtered.index, edited_df.iterrows()
+                                    ):
+                                        if bool(row.get("delete", False)):
+                                            delete_indices.append(orig_idx)
+                                            continue
+                                        for col in editable_cols:
+                                            if col == "delete":
+                                                continue
+                                            if col in df.columns and col in edited_df.columns:
+                                                df.loc[orig_idx, col] = row[col]
+                                        try:
+                                            duration = row.get("duration_minutes", None)
+                                            if pd.notna(duration):
+                                                emp_name = row.get("employee_name", None)
+                                                emp_row = employees_all[
+                                                    employees_all["name"] == emp_name
+                                                ]
+                                                if not emp_row.empty:
+                                                    rate = float(emp_row.iloc[0]["hourly_rate"])
+                                                    hours = float(duration) / 60.0
+                                                    df.loc[orig_idx, "cost"] = round(
+                                                        hours * rate, 2
+                                                    )
+                                        except Exception:
+                                            pass
+                                    if delete_indices:
+                                        df = df.drop(index=delete_indices)
+                                    save_csv(df[TASK_COLUMNS], TASKS_FILE)
+                                    refresh_tasks_cache()
+                                    msg = "Changes saved locally."
+                                    if delete_indices:
+                                        msg += f" Deleted {len(delete_indices)} task(s)."
+                                    st.success(msg)
+                                    st.warning(
+                                        "Note: Edits/Deletions here do not affect Google Sheets, "
+                                        "which is append-only."
+                                    )
+                                    st.rerun()
