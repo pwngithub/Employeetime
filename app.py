@@ -3,31 +3,19 @@ import pandas as pd
 from pathlib import Path
 from datetime import datetime
 import pytz
-
-# --- Google Sheets libs (optional) ---
-GSHEETS_MODE = "gspread"  # Change to "gspread-pandas" if preferred
-GSHEETS_AVAILABLE = False
+import base64
+import requests
 try:
-    import gspread
     from google.oauth2.service_account import Credentials
+    from googleapiclient.discovery import build
     GSHEETS_AVAILABLE = True
-    st.info(f"gspread library loaded (version {gspread.__version__}).")
+    st.info("Google Sheets API libraries loaded.")
 except ImportError:
+    GSHEETS_AVAILABLE = False
     st.warning(
-        "gspread library not installed. Google Sheets integration disabled.\n\n"
-        "To enable, add 'gspread>=5.7.0' to requirements.txt and redeploy in Streamlit Cloud."
+        "Google Sheets API libraries not installed. Falling back to GitHub CSV.\n\n"
+        "Add 'google-api-python-client>=2.0.0' and 'google-auth>=2.0.0' to requirements.txt to enable Google Sheets."
     )
-try:
-    from gspread_pandas import Spread, Client
-    st.info("gspread-pandas library loaded.")
-    if GSHEETS_MODE == "gspread-pandas":
-        GSHEETS_AVAILABLE = True
-except ImportError:
-    if GSHEETS_MODE == "gspread-pandas":
-        st.warning(
-            "gspread-pandas library not installed. Falling back to gspread or disabling Google Sheets integration.\n\n"
-            "Add 'gspread-pandas' to requirements.txt to use gspread-pandas."
-        )
 
 # -------------------------------
 # CONFIGURATION
@@ -99,68 +87,116 @@ def create_default_task_types() -> pd.DataFrame:
 # GOOGLE SHEETS HELPERS
 # -------------------------------
 @st.cache_resource
-def connect_gsheet():
+def connect_gsheet_api():
     if not GSHEETS_AVAILABLE:
-        st.error(
-            f"Cannot connect to Google Sheets: {GSHEETS_MODE} library not installed.\n\n"
-            f"Add '{GSHEETS_MODE}>=5.7.0' to requirements.txt and redeploy in Streamlit Cloud."
-        )
+        st.error("Google Sheets API libraries not installed. Using GitHub CSV.")
         return None
     try:
-        if "gcp_service_account" not in st.secrets:
-            st.error("Missing [gcp_service_account] in Streamlit secrets. Please add Google Service Account credentials.")
+        creds_dict = st.secrets.get("gcp_service_account", {})
+        if not creds_dict:
+            st.error("Missing [gcp_service_account] in Streamlit secrets.")
             return None
-        creds_dict = st.secrets["gcp_service_account"]
-        required_keys = ["type", "project_id", "private_key_id", "private_key", "client_email", "client_id"]
-        missing_keys = [key for key in required_keys if key not in creds_dict]
-        if missing_keys:
-            st.error(f"Missing keys in [gcp_service_account]: {', '.join(missing_keys)}")
-            return None
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive",
-        ]
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        if GSHEETS_MODE == "gspread-pandas":
-            return Client(creds=creds)
-        return gspread.authorize(creds)
+        service = build("sheets", "v4", credentials=creds)
+        return service
     except Exception as e:
-        st.error(f"Google Sheets Connection Error: {e}. Check Streamlit secrets for valid credentials.")
+        st.error(f"Google Sheets API Connection Error: {e}")
         return None
 
-def write_task_to_gsheet(task_data: dict):
+def write_task_to_gsheet_api(tasks: list):
+    service = connect_gsheet_api()
+    if not service:
+        return False
+    try:
+        sheet_cfg = st.secrets.get("google_sheet", {})
+        sheet_id = sheet_cfg.get("sheet_id", "1RVRUtL-y-F5e5KCqpdDQkN6voBIiGSvHjX_9fMNANqI")
+        worksheet_name = sheet_cfg.get("worksheet_name", "Tasks")
+        # Check if headers exist
+        result = service.spreadsheets().values().get(
+            spreadsheetId=sheet_id, range=f"{worksheet_name}!A1:Z1"
+        ).execute()
+        if not result.get("values"):
+            service.spreadsheets().values().update(
+                spreadsheetId=sheet_id,
+                range=f"{worksheet_name}!A1",
+                valueInputOption="USER_ENTERED",
+                body={"values": [TASK_COLUMNS]},
+            ).execute()
+        # Append tasks
+        rows = [[str(task.get(col, "")) for col in TASK_COLUMNS] for task in tasks]
+        service.spreadsheets().values().append(
+            spreadsheetId=sheet_id,
+            range=f"{worksheet_name}!A1",
+            valueInputOption="USER_ENTERED",
+            body={"values": rows},
+        ).execute()
+        st.success(f"Appended {len(tasks)} tasks to Google Sheet (Worksheet: {worksheet_name}).")
+        return True
+    except Exception as e:
+        st.error(f"Failed to write to Google Sheet: {e}")
+        return False
+
+# -------------------------------
+# GITHUB CSV HELPERS
+# -------------------------------
+def write_task_to_github(tasks: list):
+    try:
+        github_cfg = st.secrets.get("github", {})
+        token = github_cfg.get("token")
+        repo = github_cfg.get("repo")
+        branch = github_cfg.get("branch", "main")
+        file_path = github_cfg.get("file_path", "data/tasks.csv")
+        if not all([token, repo, file_path]):
+            st.error("Missing GitHub configuration in Streamlit secrets (token, repo, file_path).")
+            return False
+        # Get current file content
+        headers = {"Authorization": f"token {token}"}
+        url = f"https://api.github.com/repos/{repo}/contents/{file_path}?ref={branch}"
+        response = requests.get(url, headers=headers)
+        df = pd.DataFrame(columns=TASK_COLUMNS)
+        if response.status_code == 200:
+            content = base64.b64decode(response.json()["content"]).decode("utf-8")
+            df = pd.read_csv(pd.StringIO(content))
+        # Append new tasks
+        new_rows = pd.DataFrame(tasks, columns=TASK_COLUMNS)
+        df = pd.concat([df, new_rows], ignore_index=True)
+        # Encode updated content
+        content = df.to_csv(index=False).encode("utf-8")
+        encoded_content = base64.b64encode(content).decode("utf-8")
+        # Update file
+        data = {
+            "message": f"Append {len(tasks)} tasks to {file_path}",
+            "content": encoded_content,
+            "branch": branch,
+        }
+        if response.status_code == 200:
+            data["sha"] = response.json()["sha"]
+        response = requests.put(url, headers=headers, json=data)
+        if response.status_code in [200, 201]:
+            st.success(f"Appended {len(tasks)} tasks to GitHub CSV ({file_path}).")
+            return True
+        else:
+            st.error(f"Failed to update GitHub CSV: {response.json().get('message', 'Unknown error')}")
+            return False
+    except Exception as e:
+        st.error(f"GitHub CSV write error: {e}")
+        return False
+
+def write_task_to_storage(task_data: dict):
     if "pending_tasks" not in st.session_state:
         st.session_state.pending_tasks = []
     st.session_state.pending_tasks.append(task_data)
     if len(st.session_state.pending_tasks) >= 5:  # Batch every 5 tasks
-        client = connect_gsheet()
-        if not client:
-            return
-        try:
-            sheet_cfg = st.secrets.get("google_sheet", {})
-            sheet_name = sheet_cfg.get("sheet_name")
-            worksheet_name = sheet_cfg.get("worksheet_name", "Tasks")
-            if GSHEETS_MODE == "gspread-pandas":
-                spread = Spread(sheet_name, sheet=worksheet_name, client=client)
-                df = spread.sheet_to_df(index=None) if spread.sheet.get_all_values() else pd.DataFrame(columns=TASK_COLUMNS)
-                new_rows = pd.DataFrame(st.session_state.pending_tasks, columns=TASK_COLUMNS)
-                df = pd.concat([df, new_rows], ignore_index=True)
-                spread.df_to_sheet(df, index=False, headers=True, start="A1")
-            else:
-                ws = client.open(sheet_name).worksheet(worksheet_name)
-                headers = TASK_COLUMNS
-                if not ws.get_all_values():
-                    ws.append_row(headers, value_input_option="USER_ENTERED")
-                rows = [[str(task.get(col, "")) for col in headers] for task in st.session_state.pending_tasks]
-                ws.append_rows(rows, value_input_option="USER_ENTERED")
-            st.success(f"Appended {len(st.session_state.pending_tasks)} tasks to Google Sheet '{sheet_name}' (Worksheet: {worksheet_name}).")
+        success = False
+        if GSHEETS_AVAILABLE:
+            success = write_task_to_gsheet_api(st.session_state.pending_tasks)
+        if not success:
+            success = write_task_to_github(st.session_state.pending_tasks)
+        if success:
             st.session_state.pending_tasks = []
-        except (gspread.exceptions.SpreadsheetNotFound, Exception) as e:
-            st.error(f"Spreadsheet '{sheet_name}' not found. Ensure it exists and is shared with {st.secrets['gcp_service_account']['client_email']}.")
-        except (gspread.exceptions.WorksheetNotFound, Exception) as e:
-            st.error(f"Worksheet '{worksheet_name}' not found in '{sheet_name}'. Check name in Streamlit secrets.")
-        except Exception as e:
-            st.error(f"Failed to write to Google Sheet: {e}")
+        else:
+            st.error("Failed to write to both Google Sheets and GitHub CSV. Tasks saved locally.")
 
 # -------------------------------
 # DATA LOADERS (CACHED)
@@ -350,13 +386,13 @@ elif page == "2️⃣ Employee Tasks":
                     tasks.loc[tasks["task_id"] == active_id, "duration_minutes"] = minutes
                     tasks.loc[tasks["task_id"] == active_id, "cost"] = cost
                     completed_task_row = tasks[tasks["task_id"] == active_id].iloc[0]
-                    write_task_to_gsheet(completed_task_row.to_dict())
+                    write_task_to_storage(completed_task_row.to_dict())
                     save_csv(tasks, TASKS_FILE)
                     refresh_tasks_cache()
                     st.session_state["active_task_id"] = None
                     st.success(
                         f"Task finished. Duration {minutes:.1f} minutes. "
-                        "Logged to local CSV and Google Sheet (if configured)."
+                        "Logged to local CSV and Google Sheet/GitHub (if configured)."
                     )
                     st.rerun()
         st.subheader("Task Log")
@@ -403,31 +439,41 @@ elif page == "3️⃣ Admin":
                 st.session_state["admin_authenticated"] = False
                 st.session_state["admin_username"] = None
                 st.rerun()
-            st.subheader("Google Sheets Status")
-            if not GSHEETS_AVAILABLE:
-                st.error(
-                    f"Google Sheets integration disabled: {GSHEETS_MODE} library not installed.\n\n"
-                    f"Add '{GSHEETS_MODE}>=5.7.0' to requirements.txt and redeploy in Streamlit Cloud."
-                )
+            st.subheader("Storage Status")
             if st.button("🔍 Test Google Sheets Connection"):
-                client = connect_gsheet()
-                if client:
+                service = connect_gsheet_api()
+                if service:
                     sheet_cfg = st.secrets.get("google_sheet", {})
-                    sheet_name = sheet_cfg.get("sheet_name", "Unknown")
-                    worksheet_name = sheet_cfg.get("worksheet_name", "Unknown")
+                    sheet_id = sheet_cfg.get("sheet_id", "1RVRUtL-y-F5e5KCqpdDQkN6voBIiGSvHjX_9fMNANqI")
+                    worksheet_name = sheet_cfg.get("worksheet_name", "Tasks")
                     try:
-                        if GSHEETS_MODE == "gspread-pandas":
-                            spread = Spread(sheet_name, sheet=worksheet_name, client=client)
-                            row_count = len(spread.sheet.get_all_values())
-                        else:
-                            sh = client.open(sheet_name)
-                            ws = sh.worksheet(worksheet_name)
-                            row_count = len(ws.get_all_values())
-                        st.success(f"Connected! Sheet: {sheet_name}, Worksheet: {worksheet_name}, Rows: {row_count}")
+                        result = service.spreadsheets().values().get(
+                            spreadsheetId=sheet_id, range=f"{worksheet_name}!A1:Z1"
+                        ).execute()
+                        row_count = len(service.spreadsheets().values().get(
+                            spreadsheetId=sheet_id, range=worksheet_name
+                        ).execute().get("values", []))
+                        st.success(f"Connected! Sheet ID: {sheet_id}, Worksheet: {worksheet_name}, Rows: {row_count}")
                     except Exception as e:
                         st.error(f"Test failed: {e}")
                 else:
-                    st.error("Client connection failed. Check Streamlit secrets or library installation.")
+                    st.error("Google Sheets connection failed. Check secrets or library installation.")
+            if st.button("🔍 Test GitHub Connection"):
+                github_cfg = st.secrets.get("github", {})
+                token = github_cfg.get("token")
+                repo = github_cfg.get("repo")
+                branch = github_cfg.get("branch", "main")
+                file_path = github_cfg.get("file_path", "data/tasks.csv")
+                if not all([token, repo, file_path]):
+                    st.error("Missing GitHub configuration in secrets.")
+                else:
+                    headers = {"Authorization": f"token {token}"}
+                    url = f"https://api.github.com/repos/{repo}/contents/{file_path}?ref={branch}"
+                    response = requests.get(url, headers=headers)
+                    if response.status_code == 200:
+                        st.success(f"Connected to GitHub repo {repo}, file {file_path}.")
+                    else:
+                        st.error(f"GitHub connection failed: {response.json().get('message', 'Unknown error')}")
             if st.session_state["admin_authenticated"]:
                 section = st.radio(
                     "Admin Section",
@@ -711,7 +757,7 @@ elif page == "3️⃣ Admin":
                                         msg += f" Deleted {len(delete_indices)} task(s)."
                                     st.success(msg)
                                     st.warning(
-                                        "Note: Edits/Deletions here do not affect Google Sheets, "
-                                        "which is append-only."
+                                        "Note: Edits/Deletions here do not affect Google Sheets or GitHub, "
+                                        "which are append-only."
                                     )
                                     st.rerun()
