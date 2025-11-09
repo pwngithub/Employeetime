@@ -8,12 +8,14 @@ try:
     import gspread
     from google.oauth2.service_account import Credentials
     GSHEETS_AVAILABLE = True
+    if gspread.__version__ < "5.7.0":
+        st.warning("gspread version is outdated. Please update to 5.7.0 or higher in requirements.txt.")
 except ImportError:
     GSHEETS_AVAILABLE = False
     st.warning(
         "gspread library not installed. Google Sheets integration disabled.\n\n"
-        "To enable, add 'gspread' to requirements.txt and redeploy, or run 'pip install gspread' locally."
-    )  # UPDATED: Clearer instructions
+        "To enable, add 'gspread>=5.7.0' to requirements.txt and redeploy in Streamlit Cloud."
+    )
 # -------------------------------
 # CONFIGURATION
 # -------------------------------
@@ -27,7 +29,7 @@ DATA_DIR.mkdir(exist_ok=True)
 EMPLOYEE_FILE = DATA_DIR / "employees.csv"
 TASKS_FILE = DATA_DIR / "tasks.csv"
 TASK_TYPES_FILE = DATA_DIR / "task_types.csv"
-TIMEZONE = pytz.timezone('America/New_York')  # Adjust to your preferred timezone
+TIMEZONE = pytz.timezone('America/New_York')  # Adjust to your timezone
 # -------------------------------
 # CONSTANTS
 # -------------------------------
@@ -67,7 +69,6 @@ def save_csv(df: pd.DataFrame, path: Path):
     path.parent.mkdir(exist_ok=True)
     df.to_csv(path, index=False)
 def create_default_task_types() -> pd.DataFrame:
-    """Default tasks including the sales pipeline steps."""
     defaults = [
         {"task_type_id": "TT_SALES_1", "task_name": "Sales – First Contact Reply", "category": "Sales"},
         {"task_type_id": "TT_SALES_2", "task_name": "Sales – Schedule Site Survey", "category": "Sales"},
@@ -83,16 +84,15 @@ def create_default_task_types() -> pd.DataFrame:
 # -------------------------------
 @st.cache_resource
 def connect_gsheet():
-    """Connects to Google Sheets using Streamlit Secrets."""
     if not GSHEETS_AVAILABLE:
         st.error(
             "Cannot connect to Google Sheets: gspread library not installed.\n\n"
-            "Add 'gspread' to requirements.txt and redeploy, or run 'pip install gspread' locally."
-        )  # UPDATED: Stronger error message
+            "Add 'gspread>=5.7.0' to requirements.txt and redeploy in Streamlit Cloud."
+        )
         return None
     try:
         if "gcp_service_account" not in st.secrets:
-            st.error("Missing [gcp_service_account] in secrets.toml. Please add Google Service Account credentials.")
+            st.error("Missing [gcp_service_account] in Streamlit secrets. Please add Google Service Account credentials.")
             return None
         creds_dict = st.secrets["gcp_service_account"]
         required_keys = ["type", "project_id", "private_key_id", "private_key", "client_email", "client_id"]
@@ -108,36 +108,34 @@ def connect_gsheet():
         client = gspread.authorize(creds)
         return client
     except Exception as e:
-        st.error(f"Google Sheets Connection Error: {e}. Check secrets.toml for valid credentials.")
+        st.error(f"Google Sheets Connection Error: {e}. Check Streamlit secrets for valid credentials.")
         return None
 def write_task_to_gsheet(task_data: dict):
-    """Appends a single task (as a dict) to the configured Google Sheet."""
-    client = connect_gsheet()
-    if client is None:
-        st.warning("Google Sheets not connected. Skipping write.")
-        return
-    try:
-        sheet_cfg = st.secrets.get("google_sheet", {})
-        sheet_name = sheet_cfg.get("sheet_name")
-        worksheet_name = sheet_cfg.get("worksheet_name")
-        if not sheet_name or not worksheet_name:
-            st.error("Missing [google_sheet] sheet_name or worksheet_name in secrets.toml.")
+    if "pending_tasks" not in st.session_state:
+        st.session_state.pending_tasks = []
+    st.session_state.pending_tasks.append(task_data)
+    if len(st.session_state.pending_tasks) >= 5:  # Batch every 5 tasks
+        client = connect_gsheet()
+        if not client:
             return
-        sh = client.open(sheet_name)
-        ws = sh.worksheet(worksheet_name)
-        headers = TASK_COLUMNS
-        all_vals = ws.get_all_values()
-        if not all_vals:
-            ws.append_row(headers, value_input_option="USER_ENTERED")
-        row_to_append = [str(task_data.get(col, "")) for col in headers]
-        ws.append_row(row_to_append, value_input_option="USER_ENTERED")
-        st.success(f"Task appended to Google Sheet '{sheet_name}' (Worksheet: {worksheet_name}).")
-    except gspread.exceptions.SpreadsheetNotFound:
-        st.error(f"Spreadsheet '{sheet_name}' not found. Ensure it exists and is shared with {st.secrets['gcp_service_account']['client_email']}.")
-    except gspread.exceptions.WorksheetNotFound:
-        st.error(f"Worksheet '{worksheet_name}' not found in '{sheet_name}'. Check name in secrets.toml.")
-    except Exception as e:
-        st.error(f"Failed to write to Google Sheet: {e}")
+        try:
+            sheet_cfg = st.secrets.get("google_sheet", {})
+            sheet_name = sheet_cfg.get("sheet_name")
+            worksheet_name = sheet_cfg.get("worksheet_name", "Tasks")
+            ws = client.open(sheet_name).worksheet(worksheet_name)
+            headers = TASK_COLUMNS
+            if not ws.get_all_values():
+                ws.append_row(headers, value_input_option="USER_ENTERED")
+            rows = [[str(task.get(col, "")) for col in headers] for task in st.session_state.pending_tasks]
+            ws.append_rows(rows, value_input_option="USER_ENTERED")
+            st.success(f"Appended {len(rows)} tasks to Google Sheet '{sheet_name}' (Worksheet: {worksheet_name}).")
+            st.session_state.pending_tasks = []
+        except gspread.exceptions.SpreadsheetNotFound:
+            st.error(f"Spreadsheet '{sheet_name}' not found. Ensure it exists and is shared with {st.secrets['gcp_service_account']['client_email']}.")
+        except gspread.exceptions.WorksheetNotFound:
+            st.error(f"Worksheet '{worksheet_name}' not found in '{sheet_name}'. Check name in Streamlit secrets.")
+        except Exception as e:
+            st.error(f"Failed to write to Google Sheet: {e}")
 # -------------------------------
 # DATA LOADERS (CACHED)
 # -------------------------------
@@ -281,7 +279,6 @@ elif page == "2️⃣ Employee Tasks":
                         + (f" (Customer: {customer})" if customer else "")
                         + f" at {start_time.strftime('%H:%M:%S')}"
                     )
-        # Active Task Panel
         st.subheader("Active Task")
         active_id = st.session_state["active_task_id"]
         tasks = get_tasks()
@@ -328,7 +325,6 @@ elif page == "2️⃣ Employee Tasks":
                         "Logged to local CSV and Google Sheet (if configured)."
                     )
                     st.rerun()
-        # Task Log (cost hidden)
         st.subheader("Task Log")
         df = get_tasks()
         if df.empty:
@@ -362,7 +358,7 @@ elif page == "3️⃣ Admin":
                 if login:
                     if username in admin_users and pw == admin_users[username]:
                         st.session_state["admin_authenticated"] = True
-                        st.session_state["admin_username"] = None
+                        st.session_state["admin_username"] = username  # Fixed: Set username correctly
                         st.success(f"Welcome, {username}!")
                     else:
                         st.error("Invalid username or password.")
@@ -373,10 +369,10 @@ elif page == "3️⃣ Admin":
                 st.session_state["admin_username"] = None
                 st.rerun()
             st.subheader("Google Sheets Status")
-            if not GSHEETS_AVAILABLE:  # NEW: Persistent warning in Admin
+            if not GSHEETS_AVAILABLE:
                 st.error(
                     "Google Sheets integration disabled: gspread library not installed.\n\n"
-                    "Add 'gspread' to requirements.txt and redeploy, or run 'pip install gspread' locally."
+                    "Add 'gspread>=5.7.0' to requirements.txt and redeploy in Streamlit Cloud."
                 )
             if st.button("🔍 Test Google Sheets Connection"):
                 client = connect_gsheet()
@@ -392,14 +388,13 @@ elif page == "3️⃣ Admin":
                     except Exception as e:
                         st.error(f"Test failed: {e}")
                 else:
-                    st.error("Client connection failed. Check secrets.toml or gspread installation.")
+                    st.error("Client connection failed. Check Streamlit secrets or gspread installation.")
             if st.session_state["admin_authenticated"]:
                 section = st.radio(
                     "Admin Section",
                     ["Employees", "Reports"],
                     key="admin_section_radio",
                 )
-                # ----- EMPLOYEES -----
                 if section == "Employees":
                     st.header("Manage Employees")
                     employees = get_employees()
@@ -492,7 +487,6 @@ elif page == "3️⃣ Admin":
                         st.info("No employees yet.")
                     else:
                         st.dataframe(employees, use_container_width=True)
-                # ----- REPORTS -----
                 elif section == "Reports":
                     st.header("Reports (with Cost)")
                     tasks = get_tasks()
