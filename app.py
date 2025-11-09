@@ -249,7 +249,10 @@ elif page == "2️⃣ Employee Tasks":
         st.session_state["active_task_id"] = None
 
     if employees.empty:
-        st.warning("No employees found. If you had employees before, make sure your employees.csv file is either in the project root or in the 'data/' folder. Then reload.")
+        st.warning(
+            "No employees found. If you had employees before, make sure your employees.csv "
+            "file is either in the project root or in the 'data/' folder. Then reload."
+        )
     elif task_types.empty:
         st.warning("Add task types first on the Task List page.")
     else:
@@ -350,7 +353,10 @@ elif page == "2️⃣ Employee Tasks":
         st.subheader("Task Log")
         df = get_tasks()
         if df.empty:
-            st.info("No tasks logged yet. If you had tasks before, make sure your tasks.csv file is either in the project root or in the 'data/' folder.")
+            st.info(
+                "No tasks logged yet. If you had tasks before, make sure your tasks.csv file "
+                "is either in the project root or in the 'data/' folder."
+            )
         else:
             cols = [c for c in df.columns if c != "cost"]
             st.dataframe(df[cols].sort_values("date", ascending=False), use_container_width=True)
@@ -511,15 +517,12 @@ elif page == "3️⃣ Admin":
                     tasks = get_tasks()
                     if tasks.empty:
                         st.info(
-                            "No tasks logged yet. If you had tasks before, make sure tasks.csv is present in the project root or in the 'data/' folder."
+                            "No tasks logged yet. If you had tasks before, make sure tasks.csv "
+                            "is present in the project root or in the 'data/' folder."
                         )
                     else:
                         df = tasks.copy()
                         df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
                         if "customer" not in df.columns:
-                            df["customer"] = ""
-
-                        df_done = df[df["duration_minutes"].notna()]
-
-                        if df_do
+                            df["cu
