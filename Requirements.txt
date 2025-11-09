@@ -1,10 +1,5 @@
 streamlit
 pandas
 gspread>=5.7.0
-google-oauth2-service-account
-pytz
-google-api-python-client
 google-auth
-google-auth-oauthlib
-google-auth-httplib2
-gspread-pandas
+pytz
