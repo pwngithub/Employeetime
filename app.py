@@ -9,7 +9,7 @@ from datetime import datetime
 st.set_page_config(
     page_title="Employee & Sales Task Tracker",
     page_icon="⏱️",
-    layout="wide"
+    layout="wide",
 )
 
 DATA_DIR = Path("data")
@@ -25,11 +25,19 @@ TASK_TYPES_FILE = DATA_DIR / "task_types.csv"
 EMPLOYEE_COLUMNS = ["employee_id", "name", "role", "hourly_rate"]
 TASK_TYPE_COLUMNS = ["task_type_id", "task_name", "category"]
 TASK_COLUMNS = [
-    "task_id", "date", "employee_id", "employee_name",
-    "task_type_id", "task_name", "task_category",
+    "task_id",
+    "date",
+    "employee_id",
+    "employee_name",
+    "task_type_id",
+    "task_name",
+    "task_category",
     "customer",  # customer / lead
-    "task_description", "start_time", "end_time",
-    "duration_minutes", "cost"
+    "task_description",
+    "start_time",
+    "end_time",
+    "duration_minutes",
+    "cost",
 ]
 
 # -------------------------------
@@ -53,14 +61,42 @@ def create_default_task_types() -> pd.DataFrame:
     """Default tasks including the sales pipeline steps."""
     defaults = [
         # Sales pipeline
-        {"task_type_id": "TT_SALES_1", "task_name": "Sales – First Contact Reply", "category": "Sales"},
-        {"task_type_id": "TT_SALES_2", "task_name": "Sales – Schedule Site Survey", "category": "Sales"},
-        {"task_type_id": "TT_SALES_3", "task_name": "Sales – Record Site Survey Results", "category": "Sales"},
-        {"task_type_id": "TT_SALES_4", "task_name": "Sales – Schedule Prep", "category": "Sales"},
-        {"task_type_id": "TT_SALES_5", "task_name": "Sales – Schedule Install", "category": "Sales"},
+        {
+            "task_type_id": "TT_SALES_1",
+            "task_name": "Sales – First Contact Reply",
+            "category": "Sales",
+        },
+        {
+            "task_type_id": "TT_SALES_2",
+            "task_name": "Sales – Schedule Site Survey",
+            "category": "Sales",
+        },
+        {
+            "task_type_id": "TT_SALES_3",
+            "task_name": "Sales – Record Site Survey Results",
+            "category": "Sales",
+        },
+        {
+            "task_type_id": "TT_SALES_4",
+            "task_name": "Sales – Schedule Prep",
+            "category": "Sales",
+        },
+        {
+            "task_type_id": "TT_SALES_5",
+            "task_name": "Sales – Schedule Install",
+            "category": "Sales",
+        },
         # Construction examples
-        {"task_type_id": "TT_OPS_1", "task_name": "Construction – Pull Fiber", "category": "Construction"},
-        {"task_type_id": "TT_OPS_2", "task_name": "Construction – Lash Fiber", "category": "Construction"},
+        {
+            "task_type_id": "TT_OPS_1",
+            "task_name": "Construction – Pull Fiber",
+            "category": "Construction",
+        },
+        {
+            "task_type_id": "TT_OPS_2",
+            "task_name": "Construction – Lash Fiber",
+            "category": "Construction",
+        },
     ]
     return pd.DataFrame(defaults, columns=TASK_TYPE_COLUMNS)
 
@@ -115,8 +151,8 @@ page = st.sidebar.radio(
         "2️⃣ Employee Tasks",
         "3️⃣ Admin",
     ],
-    index=1,  # Default to Employee Tasks
-    key="main_nav"
+    index=1,  # default to Employee Tasks
+    key="main_nav",
 )
 
 # -------------------------------
@@ -133,12 +169,12 @@ if page == "1️⃣ Task List":
         with c1:
             task_name = st.text_input(
                 "Task Name",
-                placeholder="e.g., Sales – Schedule Site Survey"
+                placeholder="e.g., Sales – Schedule Site Survey",
             )
         with c2:
             category = st.text_input(
                 "Category",
-                placeholder="e.g., Sales, Construction, Admin"
+                placeholder="e.g., Sales, Construction, Admin",
             )
         task_type_id = st.text_input("Task ID (optional, auto if blank)").strip()
         submitted = st.form_submit_button("Save Task Type")
@@ -161,7 +197,7 @@ if page == "1️⃣ Task List":
                 else:
                     task_types = pd.concat(
                         [task_types, pd.DataFrame([new_row])],
-                        ignore_index=True
+                        ignore_index=True,
                     )
                     st.success(f"Added {task_name}.")
                 save_csv(task_types, TASK_TYPES_FILE)
@@ -170,9 +206,8 @@ if page == "1️⃣ Task List":
     st.subheader("Existing Tasks")
     st.dataframe(get_task_types(), use_container_width=True)
 
-
 # -------------------------------
-# PAGE 2: EMPLOYEE TASKS (TIMER, NO COST)
+# PAGE 2: EMPLOYEE TASKS
 # -------------------------------
 elif page == "2️⃣ Employee Tasks":
     st.title("Employee Tasks (Start/Finish Timer)")
@@ -282,7 +317,7 @@ elif page == "2️⃣ Employee Tasks":
 
                     st.success(f"Task finished. Duration {minutes:.1f} minutes.")
 
-        # Task Log (cost hidden, but customer shown)
+        # Task Log (cost hidden, customer shown)
         st.subheader("Task Log")
         df = get_tasks()
         if df.empty:
@@ -291,9 +326,8 @@ elif page == "2️⃣ Employee Tasks":
             cols = [c for c in df.columns if c != "cost"]
             st.dataframe(df[cols].sort_values("date", ascending=False), use_container_width=True)
 
-
 # -------------------------------
-# PAGE 3: ADMIN (USERNAME + PASSWORD)
+# PAGE 3: ADMIN
 # -------------------------------
 elif page == "3️⃣ Admin":
     st.title("Admin Area")
@@ -337,10 +371,10 @@ elif page == "3️⃣ Admin":
                 section = st.radio(
                     "Admin Section",
                     ["Employees", "Reports"],
-                    key="admin_section_radio"
+                    key="admin_section_radio",
                 )
 
-                # ----- ADMIN: EMPLOYEES -----
+                # ----- EMPLOYEES -----
                 if section == "Employees":
                     st.header("Manage Employees")
 
@@ -380,7 +414,7 @@ elif page == "3️⃣ Admin":
                                 else:
                                     employees = pd.concat(
                                         [employees, pd.DataFrame([new_row])],
-                                        ignore_index=True
+                                        ignore_index=True,
                                     )
                                     st.success(f"Added employee {name}.")
                                 save_csv(employees, EMPLOYEE_FILE)
@@ -395,7 +429,7 @@ elif page == "3️⃣ Admin":
                         selected_name = st.selectbox(
                             "Select Employee to Edit",
                             options=emp_names,
-                            key="edit_emp_select"
+                            key="edit_emp_select",
                         )
                         emp_row = employees[employees["name"] == selected_name].iloc[0]
                         current_rate = float(emp_row["hourly_rate"])
@@ -406,26 +440,26 @@ elif page == "3️⃣ Admin":
                             new_name = st.text_input(
                                 "Name",
                                 value=selected_name,
-                                key=f"edit_name_input_{emp_id}"
+                                key=f"edit_name_input_{emp_id}",
                             )
                             new_role = st.text_input(
                                 "Role",
                                 value=current_role,
-                                key=f"edit_role_input_{emp_id}"
+                                key=f"edit_role_input_{emp_id}",
                             )
                             new_rate = st.number_input(
                                 "New Hourly Rate ($/hour)",
                                 min_value=0.0,
                                 step=0.5,
                                 value=current_rate,
-                                key=f"edit_rate_input_{emp_id}"
+                                key=f"edit_rate_input_{emp_id}",
                             )
                             update = st.form_submit_button("Update Employee")
 
                             if update:
                                 employees.loc[
                                     employees["employee_id"] == emp_row["employee_id"],
-                                    ["name", "role", "hourly_rate"]
+                                    ["name", "role", "hourly_rate"],
                                 ] = [new_name, new_role, new_rate]
                                 save_csv(employees, EMPLOYEE_FILE)
                                 refresh_employees_cache()
@@ -441,7 +475,7 @@ elif page == "3️⃣ Admin":
                     else:
                         st.dataframe(employees, use_container_width=True)
 
-                # ----- ADMIN: REPORTS (WITH COST + CUSTOMER KPI + EDIT/DELETE) -----
+                # ----- REPORTS -----
                 elif section == "Reports":
                     st.header("Reports (with Cost)")
 
@@ -452,7 +486,6 @@ elif page == "3️⃣ Admin":
                         df = tasks.copy()
                         df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
-                        # Ensure 'customer' exists even for old data
                         if "customer" not in df.columns:
                             df["customer"] = ""
 
@@ -466,29 +499,22 @@ elif page == "3️⃣ Admin":
                             with c1:
                                 start_date = st.date_input(
                                     "Start date",
-                                    value=df_done["date"].min().date()
+                                    value=df_done["date"].min().date(),
                                 )
                             with c2:
                                 end_date = st.date_input(
                                     "End date",
-                                    value=df_done["date"].max().date()
+                                    value=df_done["date"].max().date(),
                                 )
                             with c3:
                                 customer_filter = st.text_input(
                                     "Filter by customer (contains)",
-                                    placeholder="leave blank for all"
+                                    placeholder="leave blank for all",
                                 )
 
                             mask = (df_done["date"] >= pd.to_datetime(start_date)) & (
                                 df_done["date"] <= pd.to_datetime(end_date)
                             )
-
                             if customer_filter:
                                 mask &= df_done["customer"].fillna("").str.contains(
-                                    customer_filter, case=False, na=False
-                                )
-
-                            df_filtered = df_done[mask]
-
-                            if df_filtered.empty:
-         
+                  
