@@ -3,19 +3,32 @@ import pandas as pd
 from pathlib import Path
 from datetime import datetime
 import pytz
+
 # --- Google Sheets libs (optional) ---
+GSHEETS_MODE = "gspread"  # Change to "gspread-pandas" if preferred
+GSHEETS_AVAILABLE = False
 try:
     import gspread
     from google.oauth2.service_account import Credentials
     GSHEETS_AVAILABLE = True
-    if gspread.__version__ < "5.7.0":
-        st.warning("gspread version is outdated. Please update to 5.7.0 or higher in requirements.txt.")
+    st.info(f"gspread library loaded (version {gspread.__version__}).")
 except ImportError:
-    GSHEETS_AVAILABLE = False
     st.warning(
         "gspread library not installed. Google Sheets integration disabled.\n\n"
         "To enable, add 'gspread>=5.7.0' to requirements.txt and redeploy in Streamlit Cloud."
     )
+try:
+    from gspread_pandas import Spread, Client
+    st.info("gspread-pandas library loaded.")
+    if GSHEETS_MODE == "gspread-pandas":
+        GSHEETS_AVAILABLE = True
+except ImportError:
+    if GSHEETS_MODE == "gspread-pandas":
+        st.warning(
+            "gspread-pandas library not installed. Falling back to gspread or disabling Google Sheets integration.\n\n"
+            "Add 'gspread-pandas' to requirements.txt to use gspread-pandas."
+        )
+
 # -------------------------------
 # CONFIGURATION
 # -------------------------------
@@ -65,9 +78,11 @@ def load_csv(path: Path, columns: list) -> pd.DataFrame:
             st.warning("Duplicate task type IDs detected. Please ensure unique IDs.")
         return df[columns]
     return pd.DataFrame(columns=columns)
+
 def save_csv(df: pd.DataFrame, path: Path):
     path.parent.mkdir(exist_ok=True)
     df.to_csv(path, index=False)
+
 def create_default_task_types() -> pd.DataFrame:
     defaults = [
         {"task_type_id": "TT_SALES_1", "task_name": "Sales – First Contact Reply", "category": "Sales"},
@@ -79,6 +94,7 @@ def create_default_task_types() -> pd.DataFrame:
         {"task_type_id": "TT_OPS_2", "task_name": "Construction – Lash Fiber", "category": "Construction"},
     ]
     return pd.DataFrame(defaults, columns=TASK_TYPE_COLUMNS)
+
 # -------------------------------
 # GOOGLE SHEETS HELPERS
 # -------------------------------
@@ -86,8 +102,8 @@ def create_default_task_types() -> pd.DataFrame:
 def connect_gsheet():
     if not GSHEETS_AVAILABLE:
         st.error(
-            "Cannot connect to Google Sheets: gspread library not installed.\n\n"
-            "Add 'gspread>=5.7.0' to requirements.txt and redeploy in Streamlit Cloud."
+            f"Cannot connect to Google Sheets: {GSHEETS_MODE} library not installed.\n\n"
+            f"Add '{GSHEETS_MODE}>=5.7.0' to requirements.txt and redeploy in Streamlit Cloud."
         )
         return None
     try:
@@ -105,11 +121,13 @@ def connect_gsheet():
             "https://www.googleapis.com/auth/drive",
         ]
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        client = gspread.authorize(creds)
-        return client
+        if GSHEETS_MODE == "gspread-pandas":
+            return Client(creds=creds)
+        return gspread.authorize(creds)
     except Exception as e:
         st.error(f"Google Sheets Connection Error: {e}. Check Streamlit secrets for valid credentials.")
         return None
+
 def write_task_to_gsheet(task_data: dict):
     if "pending_tasks" not in st.session_state:
         st.session_state.pending_tasks = []
@@ -122,26 +140,35 @@ def write_task_to_gsheet(task_data: dict):
             sheet_cfg = st.secrets.get("google_sheet", {})
             sheet_name = sheet_cfg.get("sheet_name")
             worksheet_name = sheet_cfg.get("worksheet_name", "Tasks")
-            ws = client.open(sheet_name).worksheet(worksheet_name)
-            headers = TASK_COLUMNS
-            if not ws.get_all_values():
-                ws.append_row(headers, value_input_option="USER_ENTERED")
-            rows = [[str(task.get(col, "")) for col in headers] for task in st.session_state.pending_tasks]
-            ws.append_rows(rows, value_input_option="USER_ENTERED")
-            st.success(f"Appended {len(rows)} tasks to Google Sheet '{sheet_name}' (Worksheet: {worksheet_name}).")
+            if GSHEETS_MODE == "gspread-pandas":
+                spread = Spread(sheet_name, sheet=worksheet_name, client=client)
+                df = spread.sheet_to_df(index=None) if spread.sheet.get_all_values() else pd.DataFrame(columns=TASK_COLUMNS)
+                new_rows = pd.DataFrame(st.session_state.pending_tasks, columns=TASK_COLUMNS)
+                df = pd.concat([df, new_rows], ignore_index=True)
+                spread.df_to_sheet(df, index=False, headers=True, start="A1")
+            else:
+                ws = client.open(sheet_name).worksheet(worksheet_name)
+                headers = TASK_COLUMNS
+                if not ws.get_all_values():
+                    ws.append_row(headers, value_input_option="USER_ENTERED")
+                rows = [[str(task.get(col, "")) for col in headers] for task in st.session_state.pending_tasks]
+                ws.append_rows(rows, value_input_option="USER_ENTERED")
+            st.success(f"Appended {len(st.session_state.pending_tasks)} tasks to Google Sheet '{sheet_name}' (Worksheet: {worksheet_name}).")
             st.session_state.pending_tasks = []
-        except gspread.exceptions.SpreadsheetNotFound:
+        except (gspread.exceptions.SpreadsheetNotFound, Exception) as e:
             st.error(f"Spreadsheet '{sheet_name}' not found. Ensure it exists and is shared with {st.secrets['gcp_service_account']['client_email']}.")
-        except gspread.exceptions.WorksheetNotFound:
+        except (gspread.exceptions.WorksheetNotFound, Exception) as e:
             st.error(f"Worksheet '{worksheet_name}' not found in '{sheet_name}'. Check name in Streamlit secrets.")
         except Exception as e:
             st.error(f"Failed to write to Google Sheet: {e}")
+
 # -------------------------------
 # DATA LOADERS (CACHED)
 # -------------------------------
 @st.cache_data
 def get_employees():
     return load_csv(EMPLOYEE_FILE, EMPLOYEE_COLUMNS)
+
 @st.cache_data
 def get_task_types():
     if not TASK_TYPES_FILE.exists():
@@ -153,15 +180,20 @@ def get_task_types():
         df = create_default_task_types()
         save_csv(df, TASK_TYPES_FILE)
     return df
+
 @st.cache_data
 def get_tasks():
     return load_csv(TASKS_FILE, TASK_COLUMNS)
+
 def refresh_employees_cache():
     get_employees.clear()
+
 def refresh_task_types_cache():
     get_task_types.clear()
+
 def refresh_tasks_cache():
     get_tasks.clear()
+
 # -------------------------------
 # SIDEBAR NAVIGATION
 # -------------------------------
@@ -176,6 +208,7 @@ page = st.sidebar.radio(
     index=1,
     key="main_nav",
 )
+
 # -------------------------------
 # PAGE 1: TASK LIST (LIBRARY)
 # -------------------------------
@@ -222,6 +255,7 @@ if page == "1️⃣ Task List":
                 refresh_task_types_cache()
     st.subheader("Existing Tasks")
     st.dataframe(get_task_types(), use_container_width=True)
+
 # -------------------------------
 # PAGE 2: EMPLOYEE TASKS
 # -------------------------------
@@ -332,6 +366,7 @@ elif page == "2️⃣ Employee Tasks":
         else:
             cols = [c for c in df.columns if c != "cost"]
             st.dataframe(df[cols].sort_values("date", ascending=False), use_container_width=True)
+
 # -------------------------------
 # PAGE 3: ADMIN
 # -------------------------------
@@ -358,7 +393,7 @@ elif page == "3️⃣ Admin":
                 if login:
                     if username in admin_users and pw == admin_users[username]:
                         st.session_state["admin_authenticated"] = True
-                        st.session_state["admin_username"] = username  # Fixed: Set username correctly
+                        st.session_state["admin_username"] = username
                         st.success(f"Welcome, {username}!")
                     else:
                         st.error("Invalid username or password.")
@@ -371,8 +406,8 @@ elif page == "3️⃣ Admin":
             st.subheader("Google Sheets Status")
             if not GSHEETS_AVAILABLE:
                 st.error(
-                    "Google Sheets integration disabled: gspread library not installed.\n\n"
-                    "Add 'gspread>=5.7.0' to requirements.txt and redeploy in Streamlit Cloud."
+                    f"Google Sheets integration disabled: {GSHEETS_MODE} library not installed.\n\n"
+                    f"Add '{GSHEETS_MODE}>=5.7.0' to requirements.txt and redeploy in Streamlit Cloud."
                 )
             if st.button("🔍 Test Google Sheets Connection"):
                 client = connect_gsheet()
@@ -381,14 +416,18 @@ elif page == "3️⃣ Admin":
                     sheet_name = sheet_cfg.get("sheet_name", "Unknown")
                     worksheet_name = sheet_cfg.get("worksheet_name", "Unknown")
                     try:
-                        sh = client.open(sheet_name)
-                        ws = sh.worksheet(worksheet_name)
-                        row_count = len(ws.get_all_values())
+                        if GSHEETS_MODE == "gspread-pandas":
+                            spread = Spread(sheet_name, sheet=worksheet_name, client=client)
+                            row_count = len(spread.sheet.get_all_values())
+                        else:
+                            sh = client.open(sheet_name)
+                            ws = sh.worksheet(worksheet_name)
+                            row_count = len(ws.get_all_values())
                         st.success(f"Connected! Sheet: {sheet_name}, Worksheet: {worksheet_name}, Rows: {row_count}")
                     except Exception as e:
                         st.error(f"Test failed: {e}")
                 else:
-                    st.error("Client connection failed. Check Streamlit secrets or gspread installation.")
+                    st.error("Client connection failed. Check Streamlit secrets or library installation.")
             if st.session_state["admin_authenticated"]:
                 section = st.radio(
                     "Admin Section",
