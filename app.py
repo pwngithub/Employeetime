@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
+import gspread  # --- NEW ---
+from google.oauth2.service_account import Credentials  # --- NEW ---
 
 # -------------------------------
 # CONFIGURATION
@@ -9,7 +11,7 @@ from datetime import datetime
 st.set_page_config(
     page_title="Employee & Sales Task Tracker",
     page_icon="⏱️",
-    layout="wide"
+    layout="wide",
 )
 
 DATA_DIR = Path("data")
@@ -25,11 +27,19 @@ TASK_TYPES_FILE = DATA_DIR / "task_types.csv"
 EMPLOYEE_COLUMNS = ["employee_id", "name", "role", "hourly_rate"]
 TASK_TYPE_COLUMNS = ["task_type_id", "task_name", "category"]
 TASK_COLUMNS = [
-    "task_id", "date", "employee_id", "employee_name",
-    "task_type_id", "task_name", "task_category",
+    "task_id",
+    "date",
+    "employee_id",
+    "employee_name",
+    "task_type_id",
+    "task_name",
+    "task_category",
     "customer",  # customer / lead
-    "task_description", "start_time", "end_time",
-    "duration_minutes", "cost"
+    "task_description",
+    "start_time",
+    "end_time",
+    "duration_minutes",
+    "cost",
 ]
 
 # -------------------------------
@@ -46,6 +56,7 @@ def load_csv(path: Path, columns: list) -> pd.DataFrame:
 
 
 def save_csv(df: pd.DataFrame, path: Path):
+    path.parent.mkdir(exist_ok=True)
     df.to_csv(path, index=False)
 
 
@@ -63,6 +74,69 @@ def create_default_task_types() -> pd.DataFrame:
         {"task_type_id": "TT_OPS_2", "task_name": "Construction – Lash Fiber", "category": "Construction"},
     ]
     return pd.DataFrame(defaults, columns=TASK_TYPE_COLUMNS)
+
+
+# -------------------------------
+# GOOGLE SHEETS HELPERS (NEW)
+# -------------------------------
+@st.cache_resource
+def connect_gsheet():
+    """Connects to Google Sheets using Streamlit Secrets."""
+    try:
+        creds_dict = st.secrets["gcp_service_account"]
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        client = gspread.authorize(creds)
+        return client
+    except Exception as e:
+        st.error(f"GSheet Connection Error: {e}. Check secrets.toml.")
+        return None
+
+
+def write_task_to_gsheet(task_data: dict):
+    """Appends a single task (as a dict) to the configured Google Sheet."""
+    client = connect_gsheet()
+    if client is None:
+        st.warning("Google Sheets not connected. Skipping write.")
+        return
+
+    try:
+        # Get sheet details from secrets
+        sheet_name = st.secrets["google_sheet"]["sheet_name"]
+        worksheet_name = st.secrets["google_sheet"]["worksheet_name"]
+
+        # Open the sheet and worksheet
+        sh = client.open(sheet_name)
+        ws = sh.worksheet(worksheet_name)
+
+        # Get headers. If sheet is empty, add headers first.
+        headers = TASK_COLUMNS
+        all_vals = ws.get_all_values()
+        if not all_vals:
+            ws.append_row(headers, value_input_option="USER_ENTERED")
+
+        # Prepare the row data in the correct order defined by TASK_COLUMNS
+        row_to_append = [str(task_data.get(col, "")) for col in headers]
+
+        # Append the new task row
+        ws.append_row(row_to_append, value_input_option="USER_ENTERED")
+
+    except Exception as e:
+        if isinstance(e, gspread.exceptions.SpreadsheetNotFound):
+            st.error(
+                f"GSheet Error: Spreadsheet '{sheet_name}' not found. "
+                "Check name in secrets.toml or share settings."
+            )
+        elif isinstance(e, gspread.exceptions.WorksheetNotFound):
+            st.error(
+                f"GSheet Error: Worksheet '{worksheet_name}' not found in '{sheet_name}'. "
+                "Check name in secrets.toml."
+            )
+        else:
+            st.error(f"Failed to write to Google Sheet: {e}")
 
 
 # -------------------------------
@@ -115,8 +189,8 @@ page = st.sidebar.radio(
         "2️⃣ Employee Tasks",
         "3️⃣ Admin",
     ],
-    index=1,  # 0 = Task List, 1 = Employee Tasks, 2 = Admin
-    key="main_nav"
+    index=1,  # Default: Employee Tasks
+    key="main_nav",
 )
 
 # -------------------------------
@@ -133,12 +207,12 @@ if page == "1️⃣ Task List":
         with c1:
             task_name = st.text_input(
                 "Task Name",
-                placeholder="e.g., Sales – Schedule Site Survey"
+                placeholder="e.g., Sales – Schedule Site Survey",
             )
         with c2:
             category = st.text_input(
                 "Category",
-                placeholder="e.g., Sales, Construction, Admin"
+                placeholder="e.g., Sales, Construction, Admin",
             )
         task_type_id = st.text_input("Task ID (optional, auto if blank)").strip()
         submitted = st.form_submit_button("Save Task Type")
@@ -161,7 +235,7 @@ if page == "1️⃣ Task List":
                 else:
                     task_types = pd.concat(
                         [task_types, pd.DataFrame([new_row])],
-                        ignore_index=True
+                        ignore_index=True,
                     )
                     st.success(f"Added {task_name}.")
                 save_csv(task_types, TASK_TYPES_FILE)
@@ -170,9 +244,8 @@ if page == "1️⃣ Task List":
     st.subheader("Existing Tasks")
     st.dataframe(get_task_types(), use_container_width=True)
 
-
 # -------------------------------
-# PAGE 2: EMPLOYEE TASKS (TIMER, NO COST)
+# PAGE 2: EMPLOYEE TASKS
 # -------------------------------
 elif page == "2️⃣ Employee Tasks":
     st.title("Employee Tasks (Start/Finish Timer)")
@@ -238,7 +311,7 @@ elif page == "2️⃣ Employee Tasks":
         # Active Task Panel
         st.subheader("Active Task")
         active_id = st.session_state["active_task_id"]
-        tasks = get_tasks()
+        tasks = get_tasks()  # latest
 
         if not active_id:
             st.info("No active task running.")
@@ -273,16 +346,27 @@ elif page == "2️⃣ Employee Tasks":
                     minutes = (end_dt - start_dt).total_seconds() / 60
                     cost = round((minutes / 60) * float(emp["hourly_rate"]), 2)
 
+                    # Update the DataFrame
                     tasks.loc[tasks["task_id"] == active_id, "end_time"] = end_dt.isoformat()
                     tasks.loc[tasks["task_id"] == active_id, "duration_minutes"] = minutes
                     tasks.loc[tasks["task_id"] == active_id, "cost"] = cost
+
+                    # Completed task row as dict for Sheets
+                    completed_task_row = tasks[tasks["task_id"] == active_id].iloc[0]
+                    write_task_to_gsheet(completed_task_row.to_dict())
+
+                    # Save locally
                     save_csv(tasks, TASKS_FILE)
                     refresh_tasks_cache()
                     st.session_state["active_task_id"] = None
 
-                    st.success(f"Task finished. Duration {minutes:.1f} minutes.")
+                    st.success(
+                        f"Task finished. Duration {minutes:.1f} minutes. "
+                        "Logged to local CSV and Google Sheet."
+                    )
+                    st.experimental_rerun()
 
-        # Task Log (cost hidden, but customer shown)
+        # Task Log (cost hidden)
         st.subheader("Task Log")
         df = get_tasks()
         if df.empty:
@@ -291,9 +375,8 @@ elif page == "2️⃣ Employee Tasks":
             cols = [c for c in df.columns if c != "cost"]
             st.dataframe(df[cols].sort_values("date", ascending=False), use_container_width=True)
 
-
 # -------------------------------
-# PAGE 3: ADMIN (USERNAME + PASSWORD)
+# PAGE 3: ADMIN
 # -------------------------------
 elif page == "3️⃣ Admin":
     st.title("Admin Area")
@@ -331,13 +414,13 @@ elif page == "3️⃣ Admin":
             if st.button("Logout", key="admin_logout"):
                 st.session_state["admin_authenticated"] = False
                 st.session_state["admin_username"] = None
-                st.rerun()
+                st.experimental_rerun()
 
             if st.session_state["admin_authenticated"]:
                 section = st.radio(
                     "Admin Section",
                     ["Employees", "Reports"],
-                    key="admin_section_radio"
+                    key="admin_section_radio",
                 )
 
                 # ----- ADMIN: EMPLOYEES -----
@@ -380,7 +463,7 @@ elif page == "3️⃣ Admin":
                                 else:
                                     employees = pd.concat(
                                         [employees, pd.DataFrame([new_row])],
-                                        ignore_index=True
+                                        ignore_index=True,
                                     )
                                     st.success(f"Added employee {name}.")
                                 save_csv(employees, EMPLOYEE_FILE)
@@ -395,7 +478,7 @@ elif page == "3️⃣ Admin":
                         selected_name = st.selectbox(
                             "Select Employee to Edit",
                             options=emp_names,
-                            key="edit_emp_select"
+                            key="edit_emp_select",
                         )
                         emp_row = employees[employees["name"] == selected_name].iloc[0]
                         current_rate = float(emp_row["hourly_rate"])
@@ -406,26 +489,26 @@ elif page == "3️⃣ Admin":
                             new_name = st.text_input(
                                 "Name",
                                 value=selected_name,
-                                key=f"edit_name_input_{emp_id}"
+                                key=f"edit_name_input_{emp_id}",
                             )
                             new_role = st.text_input(
                                 "Role",
                                 value=current_role,
-                                key=f"edit_role_input_{emp_id}"
+                                key=f"edit_role_input_{emp_id}",
                             )
                             new_rate = st.number_input(
                                 "New Hourly Rate ($/hour)",
                                 min_value=0.0,
                                 step=0.5,
                                 value=current_rate,
-                                key=f"edit_rate_input_{emp_id}"
+                                key=f"edit_rate_input_{emp_id}",
                             )
                             update = st.form_submit_button("Update Employee")
 
                             if update:
                                 employees.loc[
                                     employees["employee_id"] == emp_row["employee_id"],
-                                    ["name", "role", "hourly_rate"]
+                                    ["name", "role", "hourly_rate"],
                                 ] = [new_name, new_role, new_rate]
                                 save_csv(employees, EMPLOYEE_FILE)
                                 refresh_employees_cache()
@@ -441,7 +524,7 @@ elif page == "3️⃣ Admin":
                     else:
                         st.dataframe(employees, use_container_width=True)
 
-                # ----- ADMIN: REPORTS (WITH COST + CUSTOMER KPI + EDIT/DELETE) -----
+                # ----- ADMIN: REPORTS -----
                 elif section == "Reports":
                     st.header("Reports (with Cost)")
 
@@ -452,7 +535,6 @@ elif page == "3️⃣ Admin":
                         df = tasks.copy()
                         df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
-                        # Ensure 'customer' exists even for old data
                         if "customer" not in df.columns:
                             df["customer"] = ""
 
@@ -466,23 +548,22 @@ elif page == "3️⃣ Admin":
                             with c1:
                                 start_date = st.date_input(
                                     "Start date",
-                                    value=df_done["date"].min().date()
+                                    value=df_done["date"].min().date(),
                                 )
                             with c2:
                                 end_date = st.date_input(
                                     "End date",
-                                    value=df_done["date"].max().date()
+                                    value=df_done["date"].max().date(),
                                 )
                             with c3:
                                 customer_filter = st.text_input(
                                     "Filter by customer (contains)",
-                                    placeholder="leave blank for all"
+                                    placeholder="leave blank for all",
                                 )
 
                             mask = (df_done["date"] >= pd.to_datetime(start_date)) & (
                                 df_done["date"] <= pd.to_datetime(end_date)
                             )
-
                             if customer_filter:
                                 mask &= df_done["customer"].fillna("").str.contains(
                                     customer_filter, case=False, na=False
@@ -493,13 +574,17 @@ elif page == "3️⃣ Admin":
                             if df_filtered.empty:
                                 st.warning("No tasks match the selected filters.")
                             else:
-                                # -------- TOP-LEVEL KPIs (FILTERED) --------
+                                # KPIs
                                 total_tasks = len(df_filtered)
                                 total_minutes = df_filtered["duration_minutes"].fillna(0).sum()
                                 total_hours = round(total_minutes / 60.0, 2)
                                 total_cost = float(df_filtered["cost"].fillna(0).sum())
-                                # count only non-empty customers
-                                cust_series = df_filtered["customer"].fillna("").astype(str).str.strip()
+                                cust_series = (
+                                    df_filtered["customer"]
+                                    .fillna("")
+                                    .astype(str)
+                                    .str.strip()
+                                )
                                 unique_customers = cust_series.replace("", pd.NA).nunique()
 
                                 k1, k2, k3, k4 = st.columns(4)
@@ -514,19 +599,20 @@ elif page == "3️⃣ Admin":
 
                                 st.markdown("---")
 
-                                # -------- Summary by Customer --------
+                                # Summary by Customer
                                 st.subheader("Summary by Customer")
-
                                 cust_df = df_filtered.copy()
                                 cust_df["customer"] = cust_df["customer"].fillna("")
                                 cust_df.loc[cust_df["customer"] == "", "customer"] = "Unspecified"
 
                                 by_customer = cust_df.groupby("customer").agg(
-                                    total_hours=("duration_minutes", lambda x: round(x.sum() / 60, 2)),
+                                    total_hours=(
+                                        "duration_minutes",
+                                        lambda x: round(x.sum() / 60, 2),
+                                    ),
                                     total_cost=("cost", "sum"),
                                     tasks=("task_id", "count"),
                                 ).reset_index()
-
                                 st.dataframe(by_customer, use_container_width=True)
 
                                 selected_customer = st.selectbox(
@@ -537,42 +623,49 @@ elif page == "3️⃣ Admin":
                                 )
 
                                 if selected_customer != "All":
-                                    row = by_customer[by_customer["customer"] == selected_customer].iloc[0]
-                                    k1c, k2c, k3c = st.columns(3)
-                                    with k1c:
+                                    row = by_customer[
+                                        by_customer["customer"] == selected_customer
+                                    ].iloc[0]
+                                    kc1, kc2, kc3 = st.columns(3)
+                                    with kc1:
                                         st.metric("Customer", selected_customer)
-                                    with k2c:
+                                    with kc2:
                                         st.metric("Total Hours", f"{row['total_hours']:.2f}")
-                                    with k3c:
+                                    with kc3:
                                         st.metric("Total Cost", f"${row['total_cost']:.2f}")
 
                                 st.markdown("---")
 
-                                # -------- Summary by Employee --------
+                                # Summary by Employee
                                 st.subheader("Summary by Employee")
                                 emp = df_filtered.groupby("employee_name").agg(
-                                    total_hours=("duration_minutes", lambda x: round(x.sum() / 60, 2)),
+                                    total_hours=(
+                                        "duration_minutes",
+                                        lambda x: round(x.sum() / 60, 2),
+                                    ),
                                     total_cost=("cost", "sum"),
                                     tasks=("task_id", "count"),
                                 ).reset_index()
                                 st.dataframe(emp, use_container_width=True)
 
-                                # -------- Summary by Task --------
+                                # Summary by Task
                                 st.subheader("Summary by Task")
-                                t = df_filtered.groupby(["task_name", "task_category"]).agg(
-                                    total_hours=("duration_minutes", lambda x: round(x.sum() / 60, 2)),
+                                t = df_filtered.groupby(
+                                    ["task_name", "task_category"]
+                                ).agg(
+                                    total_hours=(
+                                        "duration_minutes",
+                                        lambda x: round(x.sum() / 60, 2),
+                                    ),
                                     total_cost=("cost", "sum"),
                                     tasks=("task_id", "count"),
                                 ).reset_index()
                                 st.dataframe(t, use_container_width=True)
 
-                                # -------- Editable Raw Data (with Delete) --------
+                                # Raw Task Data (edit/delete)
                                 st.subheader("Raw Task Data (Admin Only – Edit or Delete)")
 
-                                # Start from filtered df (with original indices preserved)
                                 edit_df = df_filtered.copy()
-
-                                # Add a delete column (default False)
                                 if "delete" not in edit_df.columns:
                                     edit_df["delete"] = False
                                 else:
@@ -580,13 +673,10 @@ elif page == "3️⃣ Admin":
 
                                 hidden_cols = ["task_id", "employee_id", "task_type_id"]
                                 all_cols = edit_df.columns.tolist()
-
-                                # Show 'delete' first, then everything except hidden + delete
                                 visible_cols = ["delete"] + [
                                     c for c in all_cols if c not in hidden_cols + ["delete"]
                                 ]
 
-                                # Columns admin is allowed to edit
                                 editable_cols = [
                                     "date",
                                     "employee_name",
@@ -614,41 +704,47 @@ elif page == "3️⃣ Admin":
                                     employees_all = get_employees()
                                     delete_indices = []
 
-                                    # df_filtered.index are the original row indices in df
-                                    for orig_idx, (_, row) in zip(df_filtered.index, edited_df.iterrows()):
-                                        # handle delete
+                                    for orig_idx, (_, row) in zip(
+                                        df_filtered.index, edited_df.iterrows()
+                                    ):
                                         if bool(row.get("delete", False)):
                                             delete_indices.append(orig_idx)
                                             continue
 
-                                        # update editable fields
                                         for col in editable_cols:
                                             if col == "delete":
                                                 continue
                                             if col in df.columns and col in edited_df.columns:
                                                 df.loc[orig_idx, col] = row[col]
 
-                                        # recalc cost if possible
                                         try:
                                             duration = row.get("duration_minutes", None)
                                             if pd.notna(duration):
                                                 emp_name = row.get("employee_name", None)
-                                                emp_row = employees_all[employees_all["name"] == emp_name]
+                                                emp_row = employees_all[
+                                                    employees_all["name"] == emp_name
+                                                ]
                                                 if not emp_row.empty:
                                                     rate = float(emp_row.iloc[0]["hourly_rate"])
                                                     hours = float(duration) / 60.0
-                                                    df.loc[orig_idx, "cost"] = round(hours * rate, 2)
+                                                    df.loc[orig_idx, "cost"] = round(
+                                                        hours * rate, 2
+                                                    )
                                         except Exception:
                                             pass
 
-                                    # delete rows if needed
                                     if delete_indices:
                                         df = df.drop(index=delete_indices)
 
                                     save_csv(df[TASK_COLUMNS], TASKS_FILE)
                                     refresh_tasks_cache()
 
-                                    msg = "Changes saved."
+                                    msg = "Changes saved locally."
                                     if delete_indices:
                                         msg += f" Deleted {len(delete_indices)} task(s)."
                                     st.success(msg)
+                                    st.warning(
+                                        "Note: Edits/Deletions here do not affect Google Sheets, "
+                                        "which is append-only."
+                                    )
+                                    st.experimental_rerun()
