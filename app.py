@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
-
+import pytz  # NEW: For timezone handling
 # --- Google Sheets libs (optional) ---
 try:
     import gspread
@@ -10,7 +10,7 @@ try:
     GSHEETS_AVAILABLE = True
 except ImportError:
     GSHEETS_AVAILABLE = False
-
+    st.warning("gspread library not installed. Google Sheets integration disabled.")  # NEW
 # -------------------------------
 # CONFIGURATION
 # -------------------------------
@@ -19,14 +19,13 @@ st.set_page_config(
     page_icon="⏱️",
     layout="wide",
 )
-
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
-
 EMPLOYEE_FILE = DATA_DIR / "employees.csv"
 TASKS_FILE = DATA_DIR / "tasks.csv"
 TASK_TYPES_FILE = DATA_DIR / "task_types.csv"
-
+# NEW: Define timezone for consistent datetime handling
+TIMEZONE = pytz.timezone('America/New_York')  # Adjust to your preferred timezone
 # -------------------------------
 # CONSTANTS
 # -------------------------------
@@ -40,14 +39,13 @@ TASK_COLUMNS = [
     "task_type_id",
     "task_name",
     "task_category",
-    "customer",  # customer / lead
+    "customer",
     "task_description",
     "start_time",
     "end_time",
     "duration_minutes",
     "cost",
 ]
-
 # -------------------------------
 # HELPERS
 # -------------------------------
@@ -57,31 +55,28 @@ def load_csv(path: Path, columns: list) -> pd.DataFrame:
         for col in columns:
             if col not in df.columns:
                 df[col] = None
+        # NEW: Validate for duplicate IDs
+        if "employee_id" in df.columns and df["employee_id"].duplicated().any():
+            st.warning("Duplicate employee IDs detected. Please ensure unique IDs.")
+        if "task_type_id" in df.columns and df["task_type_id"].duplicated().any():
+            st.warning("Duplicate task type IDs detected. Please ensure unique IDs.")
         return df[columns]
     return pd.DataFrame(columns=columns)
-
-
 def save_csv(df: pd.DataFrame, path: Path):
     path.parent.mkdir(exist_ok=True)
     df.to_csv(path, index=False)
-
-
 def create_default_task_types() -> pd.DataFrame:
     """Default tasks including the sales pipeline steps."""
     defaults = [
-        # Sales pipeline
         {"task_type_id": "TT_SALES_1", "task_name": "Sales – First Contact Reply", "category": "Sales"},
         {"task_type_id": "TT_SALES_2", "task_name": "Sales – Schedule Site Survey", "category": "Sales"},
         {"task_type_id": "TT_SALES_3", "task_name": "Sales – Record Site Survey Results", "category": "Sales"},
         {"task_type_id": "TT_SALES_4", "task_name": "Sales – Schedule Prep", "category": "Sales"},
         {"task_type_id": "TT_SALES_5", "task_name": "Sales – Schedule Install", "category": "Sales"},
-        # Construction examples
         {"task_type_id": "TT_OPS_1", "task_name": "Construction – Pull Fiber", "category": "Construction"},
         {"task_type_id": "TT_OPS_2", "task_name": "Construction – Lash Fiber", "category": "Construction"},
     ]
     return pd.DataFrame(defaults, columns=TASK_TYPE_COLUMNS)
-
-
 # -------------------------------
 # GOOGLE SHEETS HELPERS
 # -------------------------------
@@ -89,11 +84,19 @@ def create_default_task_types() -> pd.DataFrame:
 def connect_gsheet():
     """Connects to Google Sheets using Streamlit Secrets."""
     if not GSHEETS_AVAILABLE:
-        # Library not installed; skip Sheets logging
+        st.warning("Google Sheets library (gspread) not installed.")
         return None
-
     try:
+        # NEW: Validate secrets before attempting connection
+        if "gcp_service_account" not in st.secrets:
+            st.error("Missing [gcp_service_account] in secrets.toml. Please add Google Service Account credentials.")
+            return None
         creds_dict = st.secrets["gcp_service_account"]
+        required_keys = ["type", "project_id", "private_key_id", "private_key", "client_email", "client_id"]
+        missing_keys = [key for key in required_keys if key not in creds_dict]
+        if missing_keys:
+            st.error(f"Missing keys in [gcp_service_account]: {', '.join(missing_keys)}")
+            return None
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive",
@@ -102,64 +105,42 @@ def connect_gsheet():
         client = gspread.authorize(creds)
         return client
     except Exception as e:
-        st.error(f"GSheet Connection Error: {e}. Check secrets.toml.")
+        st.error(f"Google Sheets Connection Error: {e}. Check secrets.toml for valid credentials.")
         return None
-
-
 def write_task_to_gsheet(task_data: dict):
     """Appends a single task (as a dict) to the configured Google Sheet."""
     client = connect_gsheet()
     if client is None:
         st.warning("Google Sheets not connected. Skipping write.")
         return
-
     try:
         sheet_cfg = st.secrets.get("google_sheet", {})
         sheet_name = sheet_cfg.get("sheet_name")
         worksheet_name = sheet_cfg.get("worksheet_name")
         if not sheet_name or not worksheet_name:
-            st.error("Missing [google_sheet] sheet_name or worksheet_name in secrets.")
+            st.error("Missing [google_sheet] sheet_name or worksheet_name in secrets.toml.")
             return
-
         sh = client.open(sheet_name)
         ws = sh.worksheet(worksheet_name)
-
         headers = TASK_COLUMNS
         all_vals = ws.get_all_values()
         if not all_vals:
             ws.append_row(headers, value_input_option="USER_ENTERED")
-
         row_to_append = [str(task_data.get(col, "")) for col in headers]
         ws.append_row(row_to_append, value_input_option="USER_ENTERED")
-
+        st.success(f"Task appended to Google Sheet '{sheet_name}' (Worksheet: {worksheet_name}).")  # NEW: Confirmation
+    except gspread.exceptions.SpreadsheetNotFound:
+        st.error(f"Spreadsheet '{sheet_name}' not found. Ensure it exists and is shared with {st.secrets['gcp_service_account']['client_email']}.")
+    except gspread.exceptions.WorksheetNotFound:
+        st.error(f"Worksheet '{worksheet_name}' not found in '{sheet_name}'. Check name in secrets.toml.")
     except Exception as e:
-        try:
-            import gspread  # type: ignore
-            if isinstance(e, gspread.exceptions.SpreadsheetNotFound):
-                st.error(
-                    f"GSheet Error: Spreadsheet '{sheet_name}' not found. "
-                    "Check name in secrets.toml or share settings."
-                )
-                return
-            if isinstance(e, gspread.exceptions.WorksheetNotFound):
-                st.error(
-                    f"GSheet Error: Worksheet '{worksheet_name}' not found in '{sheet_name}'. "
-                    "Check name in secrets.toml."
-                )
-                return
-        except Exception:
-            pass
         st.error(f"Failed to write to Google Sheet: {e}")
-
-
 # -------------------------------
 # DATA LOADERS (CACHED)
 # -------------------------------
 @st.cache_data
 def get_employees():
     return load_csv(EMPLOYEE_FILE, EMPLOYEE_COLUMNS)
-
-
 @st.cache_data
 def get_task_types():
     if not TASK_TYPES_FILE.exists():
@@ -171,30 +152,19 @@ def get_task_types():
         df = create_default_task_types()
         save_csv(df, TASK_TYPES_FILE)
     return df
-
-
 @st.cache_data
 def get_tasks():
     return load_csv(TASKS_FILE, TASK_COLUMNS)
-
-
 def refresh_employees_cache():
     get_employees.clear()
-
-
 def refresh_task_types_cache():
     get_task_types.clear()
-
-
 def refresh_tasks_cache():
     get_tasks.clear()
-
-
 # -------------------------------
 # SIDEBAR NAVIGATION
 # -------------------------------
 st.sidebar.title("⏱️ Task Tracker")
-
 page = st.sidebar.radio(
     label="Go to",
     options=[
@@ -202,19 +172,16 @@ page = st.sidebar.radio(
         "2️⃣ Employee Tasks",
         "3️⃣ Admin",
     ],
-    index=1,  # Default: Employee Tasks
+    index=1,
     key="main_nav",
 )
-
 # -------------------------------
 # PAGE 1: TASK LIST (LIBRARY)
 # -------------------------------
 if page == "1️⃣ Task List":
     st.title("Task Library")
     task_types = get_task_types()
-
     st.subheader("Add / Update Task Type")
-
     with st.form("task_type_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
         with c1:
@@ -229,13 +196,12 @@ if page == "1️⃣ Task List":
             )
         task_type_id = st.text_input("Task ID (optional, auto if blank)").strip()
         submitted = st.form_submit_button("Save Task Type")
-
         if submitted:
             if not task_name:
                 st.warning("Task name required.")
             else:
                 if not task_type_id:
-                    task_type_id = f"TT_{int(datetime.now().timestamp())}"
+                    task_type_id = f"TT_{int(datetime.now(TIMEZONE).timestamp())}"  # UPDATED: Use TIMEZONE
                 mask = task_types["task_type_id"] == task_type_id
                 new_row = {
                     "task_type_id": task_type_id,
@@ -253,30 +219,24 @@ if page == "1️⃣ Task List":
                     st.success(f"Added {task_name}.")
                 save_csv(task_types, TASK_TYPES_FILE)
                 refresh_task_types_cache()
-
     st.subheader("Existing Tasks")
     st.dataframe(get_task_types(), use_container_width=True)
-
 # -------------------------------
 # PAGE 2: EMPLOYEE TASKS
 # -------------------------------
 elif page == "2️⃣ Employee Tasks":
     st.title("Employee Tasks (Start/Finish Timer)")
-
     employees = get_employees()
     task_types = get_task_types()
     tasks = get_tasks()
-
     if "active_task_id" not in st.session_state:
         st.session_state["active_task_id"] = None
-
     if employees.empty:
         st.warning("Add employees first under Admin → Employees.")
     elif task_types.empty:
         st.warning("Add task types first on the Task List page.")
     else:
         st.subheader("Start a Task")
-
         with st.form("start_task_form", clear_on_submit=True):
             col1, col2 = st.columns(2)
             with col1:
@@ -286,16 +246,14 @@ elif page == "2️⃣ Employee Tasks":
                 customer = st.text_input("Customer / Lead (optional)")
                 desc = st.text_area("Notes", placeholder="Optional notes...")
             start_submitted = st.form_submit_button("▶️ Start Task")
-
             if start_submitted:
                 if st.session_state["active_task_id"]:
                     st.error("A task is already running. Finish it first.")
                 else:
                     emp = employees[employees["name"] == employee_name].iloc[0]
                     tt = task_types[task_types["task_name"] == task_choice].iloc[0]
-                    start_time = datetime.now()
+                    start_time = datetime.now(TIMEZONE)  # UPDATED: Use TIMEZONE
                     tid = f"T{int(start_time.timestamp())}"
-
                     new_task = {
                         "task_id": tid,
                         "date": start_time.date().isoformat(),
@@ -320,12 +278,10 @@ elif page == "2️⃣ Employee Tasks":
                         + (f" (Customer: {customer})" if customer else "")
                         + f" at {start_time.strftime('%H:%M:%S')}"
                     )
-
         # Active Task Panel
         st.subheader("Active Task")
         active_id = st.session_state["active_task_id"]
         tasks = get_tasks()  # latest
-
         if not active_id:
             st.info("No active task running.")
         else:
@@ -335,10 +291,9 @@ elif page == "2️⃣ Employee Tasks":
                 st.warning("Active task not found, resetting.")
             else:
                 row = active.iloc[0]
-                start_dt = datetime.fromisoformat(str(row["start_time"]))
-                elapsed = datetime.now() - start_dt
+                start_dt = datetime.fromisoformat(str(row["start_time"])).astimezone(TIMEZONE)  # UPDATED: Use TIMEZONE
+                elapsed = datetime.now(TIMEZONE) - start_dt  # UPDATED: Use TIMEZONE
                 elapsed_str = str(elapsed).split(".")[0]
-
                 c1, c2, c3 = st.columns(3)
                 with c1:
                     st.write(f"**Employee:** {row['employee_name']}")
@@ -352,30 +307,24 @@ elif page == "2️⃣ Employee Tasks":
                 with c3:
                     st.write("**Notes:**")
                     st.write(row["task_description"])
-
                 if st.button("⏹️ Finish Task", key="finish_btn"):
-                    end_dt = datetime.now()
+                    end_dt = datetime.now(TIMEZONE)  # UPDATED: Use TIMEZONE
                     emp = employees[employees["employee_id"] == row["employee_id"]].iloc[0]
                     minutes = (end_dt - start_dt).total_seconds() / 60
                     cost = round((minutes / 60) * float(emp["hourly_rate"]), 2)
-
                     tasks.loc[tasks["task_id"] == active_id, "end_time"] = end_dt.isoformat()
                     tasks.loc[tasks["task_id"] == active_id, "duration_minutes"] = minutes
                     tasks.loc[tasks["task_id"] == active_id, "cost"] = cost
-
                     completed_task_row = tasks[tasks["task_id"] == active_id].iloc[0]
                     write_task_to_gsheet(completed_task_row.to_dict())
-
                     save_csv(tasks, TASKS_FILE)
                     refresh_tasks_cache()
                     st.session_state["active_task_id"] = None
-
                     st.success(
                         f"Task finished. Duration {minutes:.1f} minutes. "
                         "Logged to local CSV and Google Sheet (if configured)."
                     )
                     st.rerun()
-
         # Task Log (cost hidden)
         st.subheader("Task Log")
         df = get_tasks()
@@ -384,34 +333,29 @@ elif page == "2️⃣ Employee Tasks":
         else:
             cols = [c for c in df.columns if c != "cost"]
             st.dataframe(df[cols].sort_values("date", ascending=False), use_container_width=True)
-
 # -------------------------------
 # PAGE 3: ADMIN
 # -------------------------------
 elif page == "3️⃣ Admin":
     st.title("Admin Area")
-
     admin_users = st.secrets.get("admin_users", None)
-
     if admin_users is None:
         st.error(
             "Admin users not configured in secrets.\n\n"
             "In Streamlit Cloud, go to 'Edit secrets' and add:\n\n"
             "[admin_users]\n"
-            'brian = "yourPasswordHere"'
+            'brian = \"yourPasswordHere\"'\n"
         )
     else:
         if "admin_authenticated" not in st.session_state:
             st.session_state["admin_authenticated"] = False
             st.session_state["admin_username"] = None
-
         if not st.session_state["admin_authenticated"]:
             st.subheader("Login")
             with st.form("admin_login_form"):
                 username = st.text_input("Username")
                 pw = st.text_input("Password", type="password")
                 login = st.form_submit_button("Login")
-
                 if login:
                     if username in admin_users and pw == admin_users[username]:
                         st.session_state["admin_authenticated"] = True
@@ -425,20 +369,33 @@ elif page == "3️⃣ Admin":
                 st.session_state["admin_authenticated"] = False
                 st.session_state["admin_username"] = None
                 st.rerun()
-
+            # NEW: Test Google Sheets Connection Button
+            st.subheader("Google Sheets Status")
+            if st.button("🔍 Test Google Sheets Connection"):
+                client = connect_gsheet()
+                if client:
+                    sheet_cfg = st.secrets.get("google_sheet", {})
+                    sheet_name = sheet_cfg.get("sheet_name", "Unknown")
+                    worksheet_name = sheet_cfg.get("worksheet_name", "Unknown")
+                    try:
+                        sh = client.open(sheet_name)
+                        ws = sh.worksheet(worksheet_name)
+                        row_count = len(ws.get_all_values())
+                        st.success(f"Connected! Sheet: {sheet_name}, Worksheet: {worksheet_name}, Rows: {row_count}")
+                    except Exception as e:
+                        st.error(f"Test failed: {e}")
+                else:
+                    st.error("Client connection failed. Check secrets.toml or gspread installation.")
             if st.session_state["admin_authenticated"]:
                 section = st.radio(
                     "Admin Section",
                     ["Employees", "Reports"],
                     key="admin_section_radio",
                 )
-
                 # ----- EMPLOYEES -----
                 if section == "Employees":
                     st.header("Manage Employees")
-
                     employees = get_employees()
-
                     st.subheader("Add / Update Employee")
                     with st.form("admin_employee_form", clear_on_submit=True):
                         col1, col2 = st.columns(2)
@@ -453,13 +410,12 @@ elif page == "3️⃣ Admin":
                                 "Employee ID (optional, auto if blank)"
                             ).strip()
                         submitted = st.form_submit_button("Save Employee")
-
                         if submitted:
                             if not name:
                                 st.warning("Name is required.")
                             else:
                                 if not employee_id:
-                                    employee_id = f"E{int(datetime.now().timestamp())}"
+                                    employee_id = f"E{int(datetime.now(TIMEZONE).timestamp())}"  # UPDATED: Use TIMEZONE
                                 mask = employees["employee_id"] == employee_id
                                 new_row = {
                                     "employee_id": employee_id,
@@ -478,7 +434,6 @@ elif page == "3️⃣ Admin":
                                     st.success(f"Added employee {name}.")
                                 save_csv(employees, EMPLOYEE_FILE)
                                 refresh_employees_cache()
-
                     st.subheader("Edit Existing Employee")
                     employees = get_employees()
                     if employees.empty:
@@ -494,7 +449,6 @@ elif page == "3️⃣ Admin":
                         current_rate = float(emp_row["hourly_rate"])
                         current_role = emp_row["role"]
                         emp_id = emp_row["employee_id"]
-
                         with st.form("edit_employee_form"):
                             new_name = st.text_input(
                                 "Name",
@@ -514,7 +468,6 @@ elif page == "3️⃣ Admin":
                                 key=f"edit_rate_input_{emp_id}",
                             )
                             update = st.form_submit_button("Update Employee")
-
                             if update:
                                 employees.loc[
                                     employees["employee_id"] == emp_row["employee_id"],
@@ -526,30 +479,24 @@ elif page == "3️⃣ Admin":
                                     f"Updated employee: '{selected_name}' → '{new_name}', "
                                     f"role='{new_role}', hourly rate=${new_rate:.2f}"
                                 )
-
                     st.subheader("Current Employees")
                     employees = get_employees()
                     if employees.empty:
                         st.info("No employees yet.")
                     else:
                         st.dataframe(employees, use_container_width=True)
-
                 # ----- REPORTS -----
                 elif section == "Reports":
                     st.header("Reports (with Cost)")
-
                     tasks = get_tasks()
                     if tasks.empty:
                         st.info("No tasks logged yet.")
                     else:
                         df = tasks.copy()
                         df["date"] = pd.to_datetime(df["date"], errors="coerce")
-
                         if "customer" not in df.columns:
                             df["customer"] = ""
-
                         df_done = df[df["duration_minutes"].notna()]
-
                         if df_done.empty:
                             st.info("No completed tasks yet.")
                         else:
@@ -569,7 +516,6 @@ elif page == "3️⃣ Admin":
                                     "Filter by customer (contains)",
                                     placeholder="leave blank for all",
                                 )
-
                             mask = (df_done["date"] >= pd.to_datetime(start_date)) & (
                                 df_done["date"] <= pd.to_datetime(end_date)
                             )
@@ -577,9 +523,7 @@ elif page == "3️⃣ Admin":
                                 mask &= df_done["customer"].fillna("").str.contains(
                                     customer_filter, case=False, na=False
                                 )
-
                             df_filtered = df_done[mask]
-
                             if df_filtered.empty:
                                 st.warning("No tasks match the selected filters.")
                             else:
@@ -594,7 +538,6 @@ elif page == "3️⃣ Admin":
                                     .str.strip()
                                 )
                                 unique_customers = cust_series.replace("", pd.NA).nunique()
-
                                 k1, k2, k3, k4 = st.columns(4)
                                 with k1:
                                     st.metric("Total Tasks", total_tasks)
@@ -604,14 +547,11 @@ elif page == "3️⃣ Admin":
                                     st.metric("Total Cost", f"${total_cost:,.2f}")
                                 with k4:
                                     st.metric("Customers", unique_customers)
-
                                 st.markdown("---")
-
                                 st.subheader("Summary by Customer")
                                 cust_df = df_filtered.copy()
                                 cust_df["customer"] = cust_df["customer"].fillna("")
                                 cust_df.loc[cust_df["customer"] == "", "customer"] = "Unspecified"
-
                                 by_customer = cust_df.groupby("customer").agg(
                                     total_hours=(
                                         "duration_minutes",
@@ -621,14 +561,12 @@ elif page == "3️⃣ Admin":
                                     tasks=("task_id", "count"),
                                 ).reset_index()
                                 st.dataframe(by_customer, use_container_width=True)
-
                                 selected_customer = st.selectbox(
                                     "View KPIs for a single customer",
                                     options=["All"] + sorted(by_customer["customer"].tolist()),
                                     index=0,
                                     key="customer_kpi_select",
                                 )
-
                                 if selected_customer != "All":
                                     row = by_customer[
                                         by_customer["customer"] == selected_customer
@@ -640,9 +578,7 @@ elif page == "3️⃣ Admin":
                                         st.metric("Total Hours", f"{row['total_hours']:.2f}")
                                     with kc3:
                                         st.metric("Total Cost", f"${row['total_cost']:.2f}")
-
                                 st.markdown("---")
-
                                 st.subheader("Summary by Employee")
                                 emp = df_filtered.groupby("employee_name").agg(
                                     total_hours=(
@@ -653,7 +589,6 @@ elif page == "3️⃣ Admin":
                                     tasks=("task_id", "count"),
                                 ).reset_index()
                                 st.dataframe(emp, use_container_width=True)
-
                                 st.subheader("Summary by Task")
                                 t = df_filtered.groupby(
                                     ["task_name", "task_category"]
@@ -666,21 +601,17 @@ elif page == "3️⃣ Admin":
                                     tasks=("task_id", "count"),
                                 ).reset_index()
                                 st.dataframe(t, use_container_width=True)
-
                                 st.subheader("Raw Task Data (Admin Only – Edit or Delete)")
-
                                 edit_df = df_filtered.copy()
                                 if "delete" not in edit_df.columns:
                                     edit_df["delete"] = False
                                 else:
                                     edit_df["delete"] = edit_df["delete"].fillna(False)
-
                                 hidden_cols = ["task_id", "employee_id", "task_type_id"]
                                 all_cols = edit_df.columns.tolist()
                                 visible_cols = ["delete"] + [
                                     c for c in all_cols if c not in hidden_cols + ["delete"]
                                 ]
-
                                 editable_cols = [
                                     "date",
                                     "employee_name",
@@ -693,7 +624,6 @@ elif page == "3️⃣ Admin":
                                     "duration_minutes",
                                     "delete",
                                 ]
-
                                 edited_df = st.data_editor(
                                     edit_df[visible_cols],
                                     use_container_width=True,
@@ -703,24 +633,20 @@ elif page == "3️⃣ Admin":
                                     ],
                                     key="raw_task_editor",
                                 )
-
                                 if st.button("💾 Save Task Changes", key="save_task_changes"):
                                     employees_all = get_employees()
                                     delete_indices = []
-
                                     for orig_idx, (_, row) in zip(
                                         df_filtered.index, edited_df.iterrows()
                                     ):
                                         if bool(row.get("delete", False)):
                                             delete_indices.append(orig_idx)
                                             continue
-
                                         for col in editable_cols:
                                             if col == "delete":
                                                 continue
                                             if col in df.columns and col in edited_df.columns:
                                                 df.loc[orig_idx, col] = row[col]
-
                                         try:
                                             duration = row.get("duration_minutes", None)
                                             if pd.notna(duration):
@@ -736,13 +662,10 @@ elif page == "3️⃣ Admin":
                                                     )
                                         except Exception:
                                             pass
-
                                     if delete_indices:
                                         df = df.drop(index=delete_indices)
-
                                     save_csv(df[TASK_COLUMNS], TASKS_FILE)
                                     refresh_tasks_cache()
-
                                     msg = "Changes saved locally."
                                     if delete_indices:
                                         msg += f" Deleted {len(delete_indices)} task(s)."
