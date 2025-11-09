@@ -2,8 +2,14 @@ import streamlit as st
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
-import gspread  # --- NEW ---
-from google.oauth2.service_account import Credentials  # --- NEW ---
+
+# --- Google Sheets libs (optional) ---
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    GSHEETS_AVAILABLE = True
+except ImportError:
+    GSHEETS_AVAILABLE = False
 
 # -------------------------------
 # CONFIGURATION
@@ -77,11 +83,15 @@ def create_default_task_types() -> pd.DataFrame:
 
 
 # -------------------------------
-# GOOGLE SHEETS HELPERS (NEW)
+# GOOGLE SHEETS HELPERS
 # -------------------------------
 @st.cache_resource
 def connect_gsheet():
     """Connects to Google Sheets using Streamlit Secrets."""
+    if not GSHEETS_AVAILABLE:
+        # Library not installed; skip Sheets logging
+        return None
+
     try:
         creds_dict = st.secrets["gcp_service_account"]
         scopes = [
@@ -104,39 +114,42 @@ def write_task_to_gsheet(task_data: dict):
         return
 
     try:
-        # Get sheet details from secrets
-        sheet_name = st.secrets["google_sheet"]["sheet_name"]
-        worksheet_name = st.secrets["google_sheet"]["worksheet_name"]
+        sheet_cfg = st.secrets.get("google_sheet", {})
+        sheet_name = sheet_cfg.get("sheet_name")
+        worksheet_name = sheet_cfg.get("worksheet_name")
+        if not sheet_name or not worksheet_name:
+            st.error("Missing [google_sheet] sheet_name or worksheet_name in secrets.")
+            return
 
-        # Open the sheet and worksheet
         sh = client.open(sheet_name)
         ws = sh.worksheet(worksheet_name)
 
-        # Get headers. If sheet is empty, add headers first.
         headers = TASK_COLUMNS
         all_vals = ws.get_all_values()
         if not all_vals:
             ws.append_row(headers, value_input_option="USER_ENTERED")
 
-        # Prepare the row data in the correct order defined by TASK_COLUMNS
         row_to_append = [str(task_data.get(col, "")) for col in headers]
-
-        # Append the new task row
         ws.append_row(row_to_append, value_input_option="USER_ENTERED")
 
     except Exception as e:
-        if isinstance(e, gspread.exceptions.SpreadsheetNotFound):
-            st.error(
-                f"GSheet Error: Spreadsheet '{sheet_name}' not found. "
-                "Check name in secrets.toml or share settings."
-            )
-        elif isinstance(e, gspread.exceptions.WorksheetNotFound):
-            st.error(
-                f"GSheet Error: Worksheet '{worksheet_name}' not found in '{sheet_name}'. "
-                "Check name in secrets.toml."
-            )
-        else:
-            st.error(f"Failed to write to Google Sheet: {e}")
+        try:
+            import gspread  # type: ignore
+            if isinstance(e, gspread.exceptions.SpreadsheetNotFound):
+                st.error(
+                    f"GSheet Error: Spreadsheet '{sheet_name}' not found. "
+                    "Check name in secrets.toml or share settings."
+                )
+                return
+            if isinstance(e, gspread.exceptions.WorksheetNotFound):
+                st.error(
+                    f"GSheet Error: Worksheet '{worksheet_name}' not found in '{sheet_name}'. "
+                    "Check name in secrets.toml."
+                )
+                return
+        except Exception:
+            pass
+        st.error(f"Failed to write to Google Sheet: {e}")
 
 
 # -------------------------------
@@ -346,23 +359,20 @@ elif page == "2️⃣ Employee Tasks":
                     minutes = (end_dt - start_dt).total_seconds() / 60
                     cost = round((minutes / 60) * float(emp["hourly_rate"]), 2)
 
-                    # Update the DataFrame
                     tasks.loc[tasks["task_id"] == active_id, "end_time"] = end_dt.isoformat()
                     tasks.loc[tasks["task_id"] == active_id, "duration_minutes"] = minutes
                     tasks.loc[tasks["task_id"] == active_id, "cost"] = cost
 
-                    # Completed task row as dict for Sheets
                     completed_task_row = tasks[tasks["task_id"] == active_id].iloc[0]
                     write_task_to_gsheet(completed_task_row.to_dict())
 
-                    # Save locally
                     save_csv(tasks, TASKS_FILE)
                     refresh_tasks_cache()
                     st.session_state["active_task_id"] = None
 
                     st.success(
                         f"Task finished. Duration {minutes:.1f} minutes. "
-                        "Logged to local CSV and Google Sheet."
+                        "Logged to local CSV and Google Sheet (if configured)."
                     )
                     st.experimental_rerun()
 
@@ -423,7 +433,7 @@ elif page == "3️⃣ Admin":
                     key="admin_section_radio",
                 )
 
-                # ----- ADMIN: EMPLOYEES -----
+                # ----- EMPLOYEES -----
                 if section == "Employees":
                     st.header("Manage Employees")
 
@@ -524,7 +534,7 @@ elif page == "3️⃣ Admin":
                     else:
                         st.dataframe(employees, use_container_width=True)
 
-                # ----- ADMIN: REPORTS -----
+                # ----- REPORTS -----
                 elif section == "Reports":
                     st.header("Reports (with Cost)")
 
@@ -543,7 +553,6 @@ elif page == "3️⃣ Admin":
                         if df_done.empty:
                             st.info("No completed tasks yet.")
                         else:
-                            # Filters
                             c1, c2, c3 = st.columns(3)
                             with c1:
                                 start_date = st.date_input(
@@ -574,7 +583,6 @@ elif page == "3️⃣ Admin":
                             if df_filtered.empty:
                                 st.warning("No tasks match the selected filters.")
                             else:
-                                # KPIs
                                 total_tasks = len(df_filtered)
                                 total_minutes = df_filtered["duration_minutes"].fillna(0).sum()
                                 total_hours = round(total_minutes / 60.0, 2)
@@ -599,7 +607,6 @@ elif page == "3️⃣ Admin":
 
                                 st.markdown("---")
 
-                                # Summary by Customer
                                 st.subheader("Summary by Customer")
                                 cust_df = df_filtered.copy()
                                 cust_df["customer"] = cust_df["customer"].fillna("")
@@ -636,7 +643,6 @@ elif page == "3️⃣ Admin":
 
                                 st.markdown("---")
 
-                                # Summary by Employee
                                 st.subheader("Summary by Employee")
                                 emp = df_filtered.groupby("employee_name").agg(
                                     total_hours=(
@@ -648,7 +654,6 @@ elif page == "3️⃣ Admin":
                                 ).reset_index()
                                 st.dataframe(emp, use_container_width=True)
 
-                                # Summary by Task
                                 st.subheader("Summary by Task")
                                 t = df_filtered.groupby(
                                     ["task_name", "task_category"]
@@ -662,7 +667,6 @@ elif page == "3️⃣ Admin":
                                 ).reset_index()
                                 st.dataframe(t, use_container_width=True)
 
-                                # Raw Task Data (edit/delete)
                                 st.subheader("Raw Task Data (Admin Only – Edit or Delete)")
 
                                 edit_df = df_filtered.copy()
