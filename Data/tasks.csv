@@ -1,1 +1,2 @@
 task_id,date,employee_id,employee_name,task_type_id,task_name,task_category,customer,task_description,start_time,end_time,duration_minutes,cost
+T1762787635,2025-11-10,E_TEST,Test User,TT_TEST,Test Task,Test,Test Customer,Debug write,2025-11-10T10:13:55.673522-05:00,2025-11-10T10:13:55.673531-05:00,10.0,5.0
