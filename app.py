@@ -87,7 +87,6 @@ def _github_safe_put(local_df: pd.DataFrame, file_path: str, key_col: str, msg: 
         headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
         url = f"https://api.github.com/repos/{repo}/contents/{file_path}?ref={branch}"
 
-        # 1. Pull current GitHub version
         r = requests.get(url, headers=headers)
         if r.status_code == 404:
             payload = {
@@ -105,7 +104,6 @@ def _github_safe_put(local_df: pd.DataFrame, file_path: str, key_col: str, msg: 
         github_df = pd.read_csv(StringIO(github_content))
         sha = r.json()["sha"]
 
-        # 2. Merge: Keep all GitHub rows + update/add from local
         merged = github_df.copy()
         for _, row in local_df.iterrows():
             if row[key_col] in merged[key_col].values:
@@ -113,7 +111,6 @@ def _github_safe_put(local_df: pd.DataFrame, file_path: str, key_col: str, msg: 
             else:
                 merged = pd.concat([merged, pd.DataFrame([row])], ignore_index=True)
 
-        # 3. Only push if changed
         if merged.to_csv(index=False) == github_df.to_csv(index=False):
             return True, "No changes"
 
@@ -300,11 +297,11 @@ elif page == "2. Employee Tasks":
                     st.success(f"Started at {now.strftime('%H:%M:%S')}")
                     st.rerun()
 
-        # ACTIVE TASK
+        # ACTIVE TASK DISPLAY
         if st.session_state.active_task_id:
             active_row = tasks[tasks["task_id"] == st.session_state.active_task_id]
             if active_row.empty:
-                st.warning("Active task not found  restarting...")
+                st.warning("Active task not found – clearing...")
                 st.session_state.active_task_id = None
                 st.rerun()
             else:
@@ -328,7 +325,7 @@ elif page == "2. Employee Tasks":
                     st.success(f"Finished – {mins:.1f} min")
                     st.rerun()
 
-        # TASK LOG WITH DELETE
+        # TASK LOG WITH STOP + DELETE
         st.subheader("Task Log")
         if tasks.empty:
             st.info("No tasks yet.")
@@ -340,9 +337,32 @@ elif page == "2. Employee Tasks":
             disp["delete"] = False
             disp["date"] = pd.to_datetime(disp["date"], errors="coerce").dt.date
 
+            # Stop function
+            def stop_task(tid):
+                row = tasks[tasks["task_id"] == tid].iloc[0]
+                end = datetime.now(TIMEZONE)
+                start = datetime.fromisoformat(row["start_time"]).astimezone(TIMEZONE)
+                mins = (end - start).total_seconds() / 60
+                rate = float(emps[emps["employee_id"] == row["employee_id"]].iloc[0]["hourly_rate"])
+                cost = round((mins / 60) * rate, 2)
+                tasks.loc[tasks["task_id"] == tid, ["end_time", "duration_minutes", "cost"]] = [end.isoformat(), mins, cost]
+                save_csv(tasks, TASKS_FILE)
+                _github_safe_put(tasks, _github_cfg()["task_file"], "task_id", f"Stopped active task {tid}")
+                if st.session_state.active_task_id == tid:
+                    st.session_state.active_task_id = None
+                st.success(f"Stopped task – {mins:.1f} min")
+                st.rerun()
+
+            # Add Stop column
+            disp["stop"] = ""
+            for idx, row in disp.iterrows():
+                if row["status"] == "Active":
+                    disp.loc[idx, "stop"] = "Stop"
+
             edited = st.data_editor(
-                disp[["task_id", "date", "employee_name", "task_name", "status", "duration_minutes", "cost", "delete"]],
+                disp[["task_id", "date", "employee_name", "task_name", "status", "duration_minutes", "cost", "stop", "delete"]],
                 column_config={
+                    "stop": st.column_config.TextColumn("Action", disabled=True),
                     "delete": st.column_config.CheckboxColumn("Delete?", default=False),
                     "task_id": st.column_config.TextColumn("ID", disabled=True),
                     "date": st.column_config.DateColumn("Date", disabled=True),
@@ -357,16 +377,22 @@ elif page == "2. Employee Tasks":
                 use_container_width=True
             )
 
+            # Handle Stop buttons
+            for _, row in edited.iterrows():
+                if row["stop"] == "Stop" and row["status"] == "Active":
+                    if st.button(f"Stop##{row['task_id']}", key=f"stop_{row['task_id']}"):
+                        stop_task(row["task_id"])
+
+            # Handle Deletions (now allows active)
             if st.button("Apply Deletions", type="primary"):
                 deleted = []
                 for _, row in edited.iterrows():
                     if row["delete"]:
-                        if row["status"] == "Active":
-                            st.warning(f"Cannot delete active task: {row['task_id']}")
-                        else:
-                            deleted.append(row["task_id"])
+                        deleted.append(row["task_id"])
                 if deleted:
                     for tid in deleted:
+                        if tid == st.session_state.active_task_id:
+                            st.session_state.active_task_id = None
                         delete_task_from_storage(tid)
                     st.success(f"Deleted {len(deleted)} task(s)")
                     st.rerun()
