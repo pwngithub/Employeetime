@@ -128,6 +128,8 @@ def write_tasklist_to_github(df: pd.DataFrame) -> bool:
 
 def write_task_to_storage(task: dict):
     write_task_to_github(task)
+    # FORCE RELOAD tasks
+    get_tasks.clear()
 
 # -------------------------------
 # CACHED DATA – FROM GITHUB
@@ -227,7 +229,7 @@ elif page == "2. Employee Tasks":
                 note = st.text_area("Notes")
             if st.form_submit_button("Start Task"):
                 if st.session_state.active_task_id:
-                    st.error("Finish current task")
+                    st.error("Finish current task first.")
                 else:
                     emp = emps[emps["name"] == emp_name].iloc[0]
                     typ = tasklist[tasklist["task_name"] == task_name].iloc[0]
@@ -241,15 +243,16 @@ elif page == "2. Employee Tasks":
                         "task_description": note, "start_time": now.isoformat(),
                         "end_time": None, "duration_minutes": None, "cost": None,
                     }
-                    write_task_to_storage(new)
+                    write_task_to_storage(new)  # This now clears cache
                     st.session_state.active_task_id = tid
-                    st.success(f"Started at {now.strftime('%H:%M')}")
+                    st.success(f"Started at {now.strftime('%H:%M:%S')}")
+                    st.rerun()  # Force immediate refresh
 
         # ACTIVE TASK – SAFE ACCESS
         if st.session_state.active_task_id:
             active_row = tasks[tasks["task_id"] == st.session_state.active_task_id]
             if active_row.empty:
-                st.warning("Active task not found – it may have been deleted.")
+                st.warning("Active task not found – restarting...")
                 st.session_state.active_task_id = None
                 st.rerun()
             else:
