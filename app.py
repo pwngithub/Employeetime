@@ -272,78 +272,131 @@ elif page == "2. Employee Tasks":
 # -------------------------------
 elif page == "3. Admin":
     st.title("Admin")
-    if "auth" not in st.session_state:
-        st.session_state.auth = False
-    if not st.session_state.auth:
-        with st.form("login"):
-            u = st.text_input("User")
-            p = st.text_input("Password", type="password")
-            if st.form_submit_button("Login"):
-                if u in st.secrets.get("admin_users", {}) and p == st.secrets["admin_users"][u]:
-                    st.session_state.auth = True
-                    st.rerun()
-                else:
-                    st.error("Invalid")
+    admin_users = st.secrets.get("admin_users")
+    if not admin_users:
+        st.error("Add `[admin_users]` to secrets.toml")
     else:
-        if st.button("Logout"): st.session_state.auth = False; st.rerun()
-        st.success("Admin Mode")
-
-        section = st.radio("Section", ["Employees", "Reports"])
-
-        if section == "Employees":
-            st.header("Employees")
-            emps = get_employees().copy()
-            tasks = get_tasks()
-
-            with st.form("add_emp", clear_on_submit=True):
-                c1,c2 = st.columns(2)
-                with c1:
-                    name = st.text_input("Name")
-                    role = st.text_input("Role", value="Support")
-                with c2:
-                    rate = st.number_input("Hourly Rate", min_value=0.0, step=0.1, value=18.0)
-                    eid = st.text_input("ID (optional)").strip()
-                if st.form_submit_button("Save"):
-                    if not name.strip():
-                        st.warning("Name required")
+        if "auth" not in st.session_state:
+            st.session_state.auth = False
+        if not st.session_state.auth:
+            with st.form("login"):
+                u = st.text_input("User")
+                p = st.text_input("Password", type="password")
+                if st.form_submit_button("Login"):
+                    if u in admin_users and p == admin_users[u]:
+                        st.session_state.auth = True
+                        st.success("Logged in")
+                        st.rerun()
                     else:
-                        if not eid:
-                            eid = f"E{int(datetime.now(TIMEZONE).timestamp())}"
-                        new_row = {"employee_id": eid, "name": name.strip(), "role": role.strip(), "hourly_rate": rate}
-                        if eid in emps["employee_id"].values:
-                            emps = emps[emps["employee_id"] != eid]
-                            st.success("Updated")
-                        else:
-                            st.success("Added")
-                        emps = pd.concat([emps, pd.DataFrame([new_row])], ignore_index=True)
-                        write_employees_to_github(emps)
-                        clear_cache()
-
-            st.subheader("Current Employees")
-            if emps.empty:
-                st.info("No employees")
-            else:
-                disp = emps.copy()
-                disp["delete"] = False
-                edited = st.data_editor(disp[["employee_id","name","role","hourly_rate","delete"]],
-                    column_config={"delete": st.column_config.CheckboxColumn("Delete?", default=False)},
-                    hide_index=True, key="emp_edit")
-                if st.button("Apply Changes", type="primary"):
-                    to_save = emps.copy()
-                    deleted = []
-                    for _, row in edited.iterrows():
-                        idx = to_save[to_save["employee_id"] == row["employee_id"]].index[0]
-                        if row["delete"]:
-                            deleted.append(idx)
-                        else:
-                            to_save.loc[idx, ["name","role","hourly_rate"]] = [row["name"], row["role"], row["hourly_rate"]]
-                    if deleted:
-                        to_save = to_save.drop(index=deleted).reset_index(drop=True)
-                        st.success(f"Deleted {len(deleted)}")
-                    write_employees_to_github(to_save)
-                    clear_cache()
-                    st.rerun()
-
+                        st.error("Invalid credentials")
         else:
-            st.header("Reports")
-            st.info("Coming soon")
+            if st.button("Logout"):
+                st.session_state.auth = False
+                st.rerun()
+            st.success("Admin Mode")
+
+            # GITHUB TEST BUTTONS
+            st.subheader("GitHub Connection Test")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                if st.button("Test Tasks CSV"):
+                    cfg = _github_cfg()
+                    r = requests.get(
+                        f"https://api.github.com/repos/{cfg['repo']}/contents/{cfg['task_file']}?ref={cfg['branch']}",
+                        headers={"Authorization": f"token {cfg['token']}"}
+                    )
+                    if r.status_code == 200:
+                        rows = len(pd.read_csv(StringIO(base64.b64decode(r.json()["content"]).decode()))) if r.json()["content"] else 0
+                        st.success(f"{rows} rows")
+                    elif r.status_code == 404:
+                        st.info("Not created yet")
+                    else:
+                        st.error("Failed")
+            with c2:
+                if st.button("Test Employees CSV"):
+                    cfg = _github_cfg()
+                    r = requests.get(
+                        f"https://api.github.com/repos/{cfg['repo']}/contents/{cfg['emp_file']}?ref={cfg['branch']}",
+                        headers={"Authorization": f"token {cfg['token']}"}
+                    )
+                    if r.status_code == 200:
+                        rows = len(pd.read_csv(StringIO(base64.b64decode(r.json()["content"]).decode()))) if r.json()["content"] else 0
+                        st.success(f"{rows} rows")
+                    elif r.status_code == 404:
+                        st.info("Not created yet")
+                    else:
+                        st.error("Failed")
+            with c3:
+                if st.button("Test Tasklist CSV"):
+                    cfg = _github_cfg()
+                    r = requests.get(
+                        f"https://api.github.com/repos/{cfg['repo']}/contents/{cfg['tasklist_file']}?ref={cfg['branch']}",
+                        headers={"Authorization": f"token {cfg['token']}"}
+                    )
+                    if r.status_code == 200:
+                        rows = len(pd.read_csv(StringIO(base64.b64decode(r.json()["content"]).decode()))) if r.json()["content"] else 0
+                        st.success(f"{rows} rows")
+                    elif r.status_code == 404:
+                        st.info("Not created yet")
+                    else:
+                        st.error("Failed")
+
+            section = st.radio("Section", ["Employees", "Reports"], key="admin_sec")
+
+            if section == "Employees":
+                st.header("Employees")
+                emps = get_employees().copy()
+                tasks = get_tasks()
+
+                with st.form("add_emp", clear_on_submit=True):
+                    c1,c2 = st.columns(2)
+                    with c1:
+                        name = st.text_input("Name")
+                        role = st.text_input("Role", value="Support")
+                    with c2:
+                        rate = st.number_input("Hourly Rate", min_value=0.0, step=0.1, value=18.0)
+                        eid = st.text_input("ID (optional)").strip()
+                    if st.form_submit_button("Save"):
+                        if not name.strip():
+                            st.warning("Name required")
+                        else:
+                            if not eid:
+                                eid = f"E{int(datetime.now(TIMEZONE).timestamp())}"
+                            new_row = {"employee_id": eid, "name": name.strip(), "role": role.strip(), "hourly_rate": rate}
+                            if eid in emps["employee_id"].values:
+                                emps = emps[emps["employee_id"] != eid]
+                                st.success("Updated")
+                            else:
+                                st.success("Added")
+                            emps = pd.concat([emps, pd.DataFrame([new_row])], ignore_index=True)
+                            write_employees_to_github(emps)
+                            clear_cache()
+
+                st.subheader("Current Employees")
+                if emps.empty:
+                    st.info("No employees")
+                else:
+                    disp = emps.copy()
+                    disp["delete"] = False
+                    edited = st.data_editor(disp[["employee_id","name","role","hourly_rate","delete"]],
+                        column_config={"delete": st.column_config.CheckboxColumn("Delete?", default=False)},
+                        hide_index=True, key="emp_edit")
+                    if st.button("Apply Changes", type="primary"):
+                        to_save = emps.copy()
+                        deleted = []
+                        for _, row in edited.iterrows():
+                            idx = to_save[to_save["employee_id"] == row["employee_id"]].index[0]
+                            if row["delete"]:
+                                deleted.append(idx)
+                            else:
+                                to_save.loc[idx, ["name","role","hourly_rate"]] = [row["name"], row["role"], row["hourly_rate"]]
+                        if deleted:
+                            to_save = to_save.drop(index=deleted).reset_index(drop=True)
+                            st.success(f"Deleted {len(deleted)}")
+                        write_employees_to_github(to_save)
+                        clear_cache()
+                        st.rerun()
+
+            else:
+                st.header("Reports")
+                st.info("Coming soon")
