@@ -14,7 +14,7 @@ st.set_page_config(page_title="Employee & Sales Task Tracker", page_icon="Timer"
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 
-TASKS_FILE = DATA_DIR / "tasks.csv"  # Only tasks use local file
+TASKS_FILE = DATA_DIR / "tasks.csv"
 TIMEZONE = pytz.timezone('America/New_York')
 
 # -------------------------------
@@ -50,7 +50,7 @@ def _github_cfg():
     }
 
 # -------------------------------
-# GITHUB: LOAD FROM GITHUB (DIRECT)
+# GITHUB: LOAD FROM GITHUB
 # -------------------------------
 def _load_from_github(file_path: str, columns: list) -> pd.DataFrame:
     try:
@@ -98,7 +98,7 @@ def _github_put(df: pd.DataFrame, file_path: str, msg: str) -> bool:
 
         put = requests.put(url, headers=headers, json=payload)
         if put.status_code in (200, 201):
-            st.success(f"Synced → {file_path}")
+            st.success(f"Synced to {file_path}")
             return True
         else:
             st.error(f"GitHub error: {put.json().get('message')}")
@@ -118,12 +118,12 @@ def write_task_to_github(task: dict) -> bool:
 
 def write_employees_to_github(emp_df: pd.DataFrame) -> bool:
     df = emp_df[EMPLOYEE_COLUMNS].copy()
-    save_csv(df, DATA_DIR / "employees.csv")  # backup
+    save_csv(df, DATA_DIR / "employees.csv")
     return _github_put(df, _github_cfg()["emp_file"], f"Update employees – {datetime.now(TIMEZONE).isoformat()}")
 
 def write_tasklist_to_github(df: pd.DataFrame) -> bool:
     df = df[TASKLIST_COLUMNS].copy()
-    save_csv(df, DATA_DIR / "Tasklist.csv")  # backup
+    save_csv(df, DATA_DIR / "Tasklist.csv")
     return _github_put(df, _github_cfg()["tasklist_file"], f"Update Tasklist – {datetime.now(TIMEZONE).isoformat()}")
 
 def write_task_to_storage(task: dict):
@@ -213,12 +213,12 @@ elif page == "2. Employee Tasks":
         st.session_state.active_task_id = None
 
     if emps.empty:
-        st.warning("Add employees in Admin → Employees")
+        st.warning("Add employees in Admin to Employees")
     elif tasklist.empty:
         st.warning("Add tasks in Task List")
     else:
         with st.form("start_form", clear_on_submit=True):
-            c1,c2 = st.columns(2)
+            c1, c2 = st.columns(2)
             with c1:
                 emp_name = st.selectbox("Employee", emps["name"])
                 task_name = st.selectbox("Task", tasklist["task_name"])
@@ -229,40 +229,49 @@ elif page == "2. Employee Tasks":
                 if st.session_state.active_task_id:
                     st.error("Finish current task")
                 else:
-                    emp = emps[emps["name"]==emp_name].iloc[0]
-                    typ = tasklist[tasklist["task_name"]==task_name].iloc[0]
+                    emp = emps[emps["name"] == emp_name].iloc[0]
+                    typ = tasklist[tasklist["task_name"] == task_name].iloc[0]
                     now = datetime.now(TIMEZONE)
                     tid = f"T{int(now.timestamp())}"
                     new = {
-                        "task_id":tid, "date":now.date().isoformat(),
-                        "employee_id":emp["employee_id"], "employee_name":emp["name"],
-                        "task_type_id":typ["task_type_id"], "task_name":typ["task_name"],
-                        "task_category":typ["category"], "customer":cust,
-                        "task_description":note, "start_time":now.isoformat(),
-                        "end_time":None, "duration_minutes":None, "cost":None,
+                        "task_id": tid, "date": now.date().isoformat(),
+                        "employee_id": emp["employee_id"], "employee_name": emp["name"],
+                        "task_type_id": typ["task_type_id"], "task_name": typ["task_name"],
+                        "task_category": typ["category"], "customer": cust,
+                        "task_description": note, "start_time": now.isoformat(),
+                        "end_time": None, "duration_minutes": None, "cost": None,
                     }
                     write_task_to_storage(new)
                     st.session_state.active_task_id = tid
                     st.success(f"Started at {now.strftime('%H:%M')}")
 
+        # ACTIVE TASK – SAFE ACCESS
         if st.session_state.active_task_id:
-            active = tasks[tasks["task_id"]==st.session_state.active_task_id].iloc[0]
-            start = datetime.fromisoformat(active["start_time"]).astimezone(TIMEZONE)
-            elapsed = datetime.now(TIMEZONE) - start
-            c1,c2 = st.columns(2)
-            with c1: st.write(f"**{active['employee_name']}** – {active['task_name']}")
-            with c2: st.write(f"**Elapsed:** {str(elapsed).split('.')[0]}")
-            if st.button("Finish Task"):
-                end = datetime.now(TIMEZONE)
-                mins = (end - start).total_seconds() / 60
-                rate = float(emps[emps["employee_id"]==active["employee_id"]].iloc[0]["hourly_rate"])
-                cost = round((mins/60) * rate, 2)
-                tasks.loc[tasks["task_id"]==st.session_state.active_task_id, ["end_time","duration_minutes","cost"]] = [end.isoformat(), mins, cost]
-                save_csv(tasks, TASKS_FILE)
-                _github_put(tasks, _github_cfg()["task_file"], f"Finish task {st.session_state.active_task_id}")
+            active_row = tasks[tasks["task_id"] == st.session_state.active_task_id]
+            if active_row.empty:
+                st.warning("Active task not found – it may have been deleted.")
                 st.session_state.active_task_id = None
-                st.success(f"Finished – {mins:.1f} min")
                 st.rerun()
+            else:
+                active = active_row.iloc[0]
+                start = datetime.fromisoformat(active["start_time"]).astimezone(TIMEZONE)
+                elapsed = datetime.now(TIMEZONE) - start
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.write(f"**{active['employee_name']}** – {active['task_name']}")
+                with c2:
+                    st.write(f"**Elapsed:** {str(elapsed).split('.')[0]}")
+                if st.button("Finish Task"):
+                    end = datetime.now(TIMEZONE)
+                    mins = (end - start).total_seconds() / 60
+                    rate = float(emps[emps["employee_id"] == active["employee_id"]].iloc[0]["hourly_rate"])
+                    cost = round((mins / 60) * rate, 2)
+                    tasks.loc[tasks["task_id"] == st.session_state.active_task_id, ["end_time", "duration_minutes", "cost"]] = [end.isoformat(), mins, cost]
+                    save_csv(tasks, TASKS_FILE)
+                    _github_put(tasks, _github_cfg()["task_file"], f"Finish task {st.session_state.active_task_id}")
+                    st.session_state.active_task_id = None
+                    st.success(f"Finished – {mins:.1f} min")
+                    st.rerun()
 
         st.subheader("Task Log")
         st.dataframe(tasks.sort_values("date", ascending=False), use_container_width=True)
