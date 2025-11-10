@@ -52,7 +52,7 @@ def _github_cfg():
     }
 
 # -------------------------------
-# GITHUB: LOAD FROM GITHUB
+# GITHUB: LOAD FROM GITHUB (SAFE)
 # -------------------------------
 def _load_from_github(file_path: str, columns: list) -> pd.DataFrame:
     try:
@@ -78,42 +78,69 @@ def _load_from_github(file_path: str, columns: list) -> pd.DataFrame:
         return pd.DataFrame(columns=columns)
 
 # -------------------------------
-# GITHUB: PUSH TO GITHUB
+# GITHUB: SAFE PUSH (MERGE + UPDATE)
 # -------------------------------
-def _github_put(df: pd.DataFrame, file_path: str, msg: str) -> bool:
+def _github_safe_put(local_df: pd.DataFrame, file_path: str, key_col: str, msg: str) -> tuple[bool, str]:
     try:
         cfg = _github_cfg()
         token, repo, branch = cfg["token"], cfg["repo"], cfg["branch"]
         headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
         url = f"https://api.github.com/repos/{repo}/contents/{file_path}?ref={branch}"
 
+        # 1. Pull current GitHub version
         r = requests.get(url, headers=headers)
-        sha = r.json().get("sha") if r.status_code == 200 else None
+        if r.status_code == 404:
+            # File doesn't exist → create
+            payload = {
+                "message": msg,
+                "content": base64.b64encode(local_df.to_csv(index=False).encode()).decode(),
+                "branch": branch,
+            }
+            put = requests.put(url, headers=headers, json=payload)
+            return put.status_code in (200, 201), "Created on GitHub"
+        
+        if r.status_code != 200:
+            return False, f"GitHub error: {r.json().get('message')}"
+
+        # 2. Decode GitHub content
+        github_content = base64.b64decode(r.json()["content"]).decode("utf-8")
+        github_df = pd.read_csv(StringIO(github_content))
+        sha = r.json()["sha"]
+
+        # 3. Merge: Keep all GitHub rows + update/add from local
+        merged = github_df.copy()
+        for _, row in local_df.iterrows():
+            if row[key_col] in merged[key_col].values:
+                merged.loc[merged[key_col] == row[key_col]] = row
+            else:
+                merged = pd.concat([merged, pd.DataFrame([row])], ignore_index=True)
+
+        # 4. Only push if changed
+        if merged.to_csv(index=False) == github_df.to_csv(index=False):
+            return True, "No changes"
 
         payload = {
             "message": msg,
-            "content": base64.b64encode(df.to_csv(index=False).encode()).decode(),
+            "content": base64.b64encode(merged.to_csv(index=False).encode()).decode(),
             "branch": branch,
+            "sha": sha,
         }
-        if sha:
-            payload["sha"] = sha
-
         put = requests.put(url, headers=headers, json=payload)
         if put.status_code in (200, 201):
-            return True, f"Synced {file_path}"
+            return True, "Synced safely"
         else:
-            return False, f"GitHub error: {put.json().get('message')}"
+            return False, f"Push failed: {put.json().get('message')}"
     except Exception as e:
-        return False, f"Push failed: {e}"
+        return False, f"Exception: {e}"
 
 # -------------------------------
-# WRITE & DELETE FUNCTIONS
+# WRITE & DELETE FUNCTIONS (SAFE)
 # -------------------------------
 def write_task_to_github(task: dict) -> bool:
     df = pd.read_csv(TASKS_FILE) if TASKS_FILE.exists() else pd.DataFrame(columns=TASK_COLUMNS)
     df = pd.concat([df, pd.DataFrame([task])], ignore_index=True)
     save_csv(df, TASKS_FILE)
-    success, msg = _github_put(df, _github_cfg()["task_file"], f"Append task {task['task_id']}")
+    success, msg = _github_safe_put(df, _github_cfg()["task_file"], "task_id", f"Append task {task['task_id']}")
     if success:
         st.success(msg)
     else:
@@ -123,7 +150,7 @@ def write_task_to_github(task: dict) -> bool:
 def write_employees_to_github(emp_df: pd.DataFrame) -> bool:
     df = emp_df[EMPLOYEE_COLUMNS].copy()
     save_csv(df, EMPLOYEES_FILE)
-    success, msg = _github_put(df, _github_cfg()["emp_file"], f"Update employees – {datetime.now(TIMEZONE).isoformat()}")
+    success, msg = _github_safe_put(df, _github_cfg()["emp_file"], "employee_id", f"Update employees")
     if success:
         st.success(msg)
     else:
@@ -133,7 +160,7 @@ def write_employees_to_github(emp_df: pd.DataFrame) -> bool:
 def write_tasklist_to_github(df: pd.DataFrame) -> bool:
     df = df[TASKLIST_COLUMNS].copy()
     save_csv(df, TASKLIST_FILE)
-    success, msg = _github_put(df, _github_cfg()["tasklist_file"], f"Update Tasklist – {datetime.now(TIMEZONE).isoformat()}")
+    success, msg = _github_safe_put(df, _github_cfg()["tasklist_file"], "task_type_id", f"Update Tasklist")
     if success:
         st.success(msg)
     else:
@@ -146,7 +173,7 @@ def delete_task_from_storage(task_id: str) -> bool:
         df = df[df["task_id"] != task_id]
         save_csv(df, TASKS_FILE)
         get_tasks.clear()
-        success, msg = _github_put(df, _github_cfg()["task_file"], f"Deleted task {task_id}")
+        success, msg = _github_safe_put(df, _github_cfg()["task_file"], "task_id", f"Deleted task {task_id}")
         if success:
             st.success(msg)
         else:
@@ -275,7 +302,7 @@ elif page == "2. Employee Tasks":
                     st.success(f"Started at {now.strftime('%H:%M:%S')}")
                     st.rerun()
 
-        # ACTIVE TASK – SAFE ACCESS
+        # ACTIVE TASK
         if st.session_state.active_task_id:
             active_row = tasks[tasks["task_id"] == st.session_state.active_task_id]
             if active_row.empty:
@@ -294,11 +321,11 @@ elif page == "2. Employee Tasks":
                 if st.button("Finish Task"):
                     end = datetime.now(TIMEZONE)
                     mins = (end - start).total_seconds() / 60
-                    rate = float(emps[emps["employee_id"] == active["employee_id"]].iloc[0]["hourly_rate"])
+                    rate = float(emps[emps["employee_id"] == active["employee_id"]].iloc[0["hourly_rate"]])
                     cost = round((mins / 60) * rate, 2)
                     tasks.loc[tasks["task_id"] == st.session_state.active_task_id, ["end_time", "duration_minutes", "cost"]] = [end.isoformat(), mins, cost]
                     save_csv(tasks, TASKS_FILE)
-                    _github_put(tasks, _github_cfg()["task_file"], f"Finish task {st.session_state.active_task_id}")
+                    _github_safe_put(tasks, _github_cfg()["task_file"], "task_id", f"Finish task {st.session_state.active_task_id}")
                     st.session_state.active_task_id = None
                     st.success(f"Finished – {mins:.1f} min")
                     st.rerun()
@@ -376,8 +403,8 @@ elif page == "3. Admin":
                 st.rerun()
             st.success("Admin Mode")
 
-            # GITHUB CONNECTION TEST + SYNC
-            st.subheader("GitHub Connection Test & Sync")
+            # GITHUB CONNECTION TEST + SAFE SYNC
+            st.subheader("GitHub Connection Test & Safe Sync")
             c1, c2, c3 = st.columns(3)
             cfg = _github_cfg()
 
@@ -398,7 +425,7 @@ elif page == "3. Admin":
                 if st.button("Sync Tasks CSV", type="primary"):
                     if TASKS_FILE.exists():
                         df = pd.read_csv(TASKS_FILE)
-                        success, msg = _github_put(df, cfg["task_file"], f"Manual sync tasks – {datetime.now(TIMEZONE).isoformat()}")
+                        success, msg = _github_safe_put(df, cfg["task_file"], "task_id", f"Manual sync tasks – {datetime.now(TIMEZONE).isoformat()}")
                         if success:
                             st.success(msg)
                         else:
@@ -423,7 +450,7 @@ elif page == "3. Admin":
                 if st.button("Sync Employees CSV", type="primary"):
                     if EMPLOYEES_FILE.exists():
                         df = pd.read_csv(EMPLOYEES_FILE)
-                        success, msg = _github_put(df, cfg["emp_file"], f"Manual sync employees – {datetime.now(TIMEZONE).isoformat()}")
+                        success, msg = _github_safe_put(df, cfg["emp_file"], "employee_id", f"Manual sync employees – {datetime.now(TIMEZONE).isoformat()}")
                         if success:
                             st.success(msg)
                         else:
@@ -448,7 +475,7 @@ elif page == "3. Admin":
                 if st.button("Sync Tasklist CSV", type="primary"):
                     if TASKLIST_FILE.exists():
                         df = pd.read_csv(TASKLIST_FILE)
-                        success, msg = _github_put(df, cfg["tasklist_file"], f"Manual sync tasklist – {datetime.now(TIMEZONE).isoformat()}")
+                        success, msg = _github_safe_put(df, cfg["tasklist_file"], "task_type_id", f"Manual sync tasklist – {datetime.now(TIMEZONE).isoformat()}")
                         if success:
                             st.success(msg)
                         else:
