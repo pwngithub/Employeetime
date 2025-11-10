@@ -379,7 +379,7 @@ elif page == "3. Admin":
                         deleted = []
                         for _, row in edited.iterrows():
                             idx = emps[emps["employee_id"]==row["employee_id"]].index[0]
-                            if row["delete58"]:
+                            if row["delete"]:
                                 if tasks[tasks["employee_id"]==row["employee_id"]].shape[0]:
                                     st.warning(f"{row['name']} has logged tasks – history kept")
                                 deleted.append(idx)
