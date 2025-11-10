@@ -90,7 +90,6 @@ def _github_safe_put(local_df: pd.DataFrame, file_path: str, key_col: str, msg: 
         # 1. Pull current GitHub version
         r = requests.get(url, headers=headers)
         if r.status_code == 404:
-            # File doesn't exist → create
             payload = {
                 "message": msg,
                 "content": base64.b64encode(local_df.to_csv(index=False).encode()).decode(),
@@ -102,12 +101,11 @@ def _github_safe_put(local_df: pd.DataFrame, file_path: str, key_col: str, msg: 
         if r.status_code != 200:
             return False, f"GitHub error: {r.json().get('message')}"
 
-        # 2. Decode GitHub content
         github_content = base64.b64decode(r.json()["content"]).decode("utf-8")
         github_df = pd.read_csv(StringIO(github_content))
         sha = r.json()["sha"]
 
-        # 3. Merge: Keep all GitHub rows + update/add from local
+        # 2. Merge: Keep all GitHub rows + update/add from local
         merged = github_df.copy()
         for _, row in local_df.iterrows():
             if row[key_col] in merged[key_col].values:
@@ -115,7 +113,7 @@ def _github_safe_put(local_df: pd.DataFrame, file_path: str, key_col: str, msg: 
             else:
                 merged = pd.concat([merged, pd.DataFrame([row])], ignore_index=True)
 
-        # 4. Only push if changed
+        # 3. Only push if changed
         if merged.to_csv(index=False) == github_df.to_csv(index=False):
             return True, "No changes"
 
@@ -306,7 +304,7 @@ elif page == "2. Employee Tasks":
         if st.session_state.active_task_id:
             active_row = tasks[tasks["task_id"] == st.session_state.active_task_id]
             if active_row.empty:
-                st.warning("Active task not found – restarting...")
+                st.warning("Active task not found  restarting...")
                 st.session_state.active_task_id = None
                 st.rerun()
             else:
@@ -321,7 +319,7 @@ elif page == "2. Employee Tasks":
                 if st.button("Finish Task"):
                     end = datetime.now(TIMEZONE)
                     mins = (end - start).total_seconds() / 60
-                    rate = float(emps[emps["employee_id"] == active["employee_id"]].iloc[0["hourly_rate"]])
+                    rate = float(emps[emps["employee_id"] == active["employee_id"]].iloc[0]["hourly_rate"])
                     cost = round((mins / 60) * rate, 2)
                     tasks.loc[tasks["task_id"] == st.session_state.active_task_id, ["end_time", "duration_minutes", "cost"]] = [end.isoformat(), mins, cost]
                     save_csv(tasks, TASKS_FILE)
