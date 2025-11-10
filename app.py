@@ -57,7 +57,7 @@ def _github_cfg():
         "branch": cfg.get("branch", "main"),
         "task_file": cfg.get("file_path", "Data/tasks.csv"),
         "emp_file": cfg.get("employee_file_path", "Data/employees.csv"),
-        "tasklist_file": cfg.get("tasklist_file_path", "Data/Tasklist.csv"),  # NEW
+        "tasklist_file": cfg.get("tasklist_file_path", "Data/Tasklist.csv"),
     }
 
 def _github_put(df: pd.DataFrame, file_path: str, msg: str) -> bool:
@@ -107,12 +107,12 @@ def write_task_to_github(task: dict) -> bool:
 
 def write_employees_to_github(emp_df: pd.DataFrame) -> bool:
     df = emp_df[EMPLOYEE_COLUMNS].copy()
-    save_csv(df, EMPLOYEE_FILE)
+    save_csv(df, EMPLOYEE_FILE)  # Update local first
     return _github_put(df, _github_cfg()["emp_file"], f"Update employees – {datetime.now(TIMEZONE).isoformat()}")
 
 def write_tasklist_to_github(df: pd.DataFrame) -> bool:
     df = df[TASKLIST_COLUMNS].copy()
-    save_csv(df, TASKLIST_LOCAL)
+    save_csv(df, TASKLIST_LOCAL)  # Update local first
     return _github_put(df, _github_cfg()["tasklist_file"], f"Update Tasklist – {datetime.now(TIMEZONE).isoformat()}")
 
 def write_task_to_storage(task: dict):
@@ -121,15 +121,14 @@ def write_task_to_storage(task: dict):
         st.error("GitHub failed – saved locally only.")
 
 # -------------------------------
-# CACHED DATA
+# CACHED DATA (with TTL for auto-refresh)
 # -------------------------------
-@st.cache_data
+@st.cache_data(ttl=300)  # Refresh every 5 min
 def get_employees():
     return load_csv(EMPLOYEE_FILE, EMPLOYEE_COLUMNS)
 
-@st.cache_data
+@st.cache_data(ttl=300)
 def get_tasklist():
-    # Try local first
     if TASKLIST_LOCAL.exists():
         df = load_csv(TASKLIST_LOCAL, TASKLIST_COLUMNS)
         if not df.empty:
@@ -144,7 +143,7 @@ def get_tasklist():
     write_tasklist_to_github(df)
     return df
 
-@st.cache_data
+@st.cache_data(ttl=300)
 def get_tasks():
     return load_csv(TASKS_FILE, TASK_COLUMNS)
 
@@ -152,11 +151,16 @@ def clear_cache():
     get_employees.clear()
     get_tasklist.clear()
     get_tasks.clear()
+    st.success("🔄 Cache cleared! Data refreshed.")
+    st.rerun()
 
 # -------------------------------
-# SIDEBAR
+# SIDEBAR with REFRESH BUTTON
 # -------------------------------
 st.sidebar.title("Task Tracker")
+if st.sidebar.button("🔄 Refresh All Data", type="secondary"):
+    clear_cache()
+
 page = st.sidebar.radio("Go to", ["1. Task List", "2. Employee Tasks", "3. Admin"], index=1, key="nav")
 
 # -------------------------------
@@ -190,7 +194,6 @@ if page == "1. Task List":
                 tasklist = pd.concat([tasklist, pd.DataFrame([new_row])], ignore_index=True)
                 if write_tasklist_to_github(tasklist):
                     clear_cache()
-                    st.rerun()
 
     st.subheader("Current Task Library")
     if tasklist.empty:
@@ -359,7 +362,6 @@ elif page == "3. Admin":
                             emps = pd.concat([emps, pd.DataFrame([new_row])], ignore_index=True)
                             if write_employees_to_github(emps):
                                 clear_cache()
-                                st.rerun()
 
                 st.subheader("Current Employees")
                 if emps.empty:
