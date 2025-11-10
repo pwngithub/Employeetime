@@ -108,7 +108,7 @@ def _github_put(df: pd.DataFrame, file_path: str, msg: str) -> bool:
         return False
 
 # -------------------------------
-# WRITE FUNCTIONS
+# WRITE & DELETE FUNCTIONS
 # -------------------------------
 def write_task_to_github(task: dict) -> bool:
     df = pd.read_csv(TASKS_FILE) if TASKS_FILE.exists() else pd.DataFrame(columns=TASK_COLUMNS)
@@ -131,7 +131,7 @@ def delete_task_from_storage(task_id: str) -> bool:
     if task_id in df["task_id"].values:
         df = df[df["task_id"] != task_id]
         save_csv(df, TASKS_FILE)
-        get_tasks.clear()  # Force reload
+        get_tasks.clear()
         return _github_put(df, _github_cfg()["task_file"], f"Deleted task {task_id}")
     return False
 
@@ -289,10 +289,12 @@ elif page == "2. Employee Tasks":
         if tasks.empty:
             st.info("No tasks yet.")
         else:
-            # Add delete column
+            # PREPARE DISPLAY COPY
             disp = tasks.copy()
-            disp["delete"] = False
             disp["status"] = disp["end_time"].apply(lambda x: "Completed" if pd.notna(x) else "Active")
+            disp["duration_minutes"] = disp["duration_minutes"].fillna(0.0)
+            disp["cost"] = disp["cost"].fillna(0.0)
+            disp["delete"] = False
 
             edited = st.data_editor(
                 disp[["task_id", "date", "employee_name", "task_name", "status", "duration_minutes", "cost", "delete"]],
@@ -307,7 +309,8 @@ elif page == "2. Employee Tasks":
                     "cost": st.column_config.NumberColumn("Cost", format="$%.2f"),
                 },
                 hide_index=True,
-                key="task_log_editor"
+                key="task_log_editor",
+                use_container_width=True
             )
 
             if st.button("Apply Deletions", type="primary"):
