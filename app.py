@@ -126,9 +126,17 @@ def write_tasklist_to_github(df: pd.DataFrame) -> bool:
     save_csv(df, DATA_DIR / "Tasklist.csv")
     return _github_put(df, _github_cfg()["tasklist_file"], f"Update Tasklist – {datetime.now(TIMEZONE).isoformat()}")
 
+def delete_task_from_storage(task_id: str) -> bool:
+    df = pd.read_csv(TASKS_FILE) if TASKS_FILE.exists() else pd.DataFrame(columns=TASK_COLUMNS)
+    if task_id in df["task_id"].values:
+        df = df[df["task_id"] != task_id]
+        save_csv(df, TASKS_FILE)
+        get_tasks.clear()  # Force reload
+        return _github_put(df, _github_cfg()["task_file"], f"Deleted task {task_id}")
+    return False
+
 def write_task_to_storage(task: dict):
     write_task_to_github(task)
-    # FORCE RELOAD tasks
     get_tasks.clear()
 
 # -------------------------------
@@ -243,10 +251,10 @@ elif page == "2. Employee Tasks":
                         "task_description": note, "start_time": now.isoformat(),
                         "end_time": None, "duration_minutes": None, "cost": None,
                     }
-                    write_task_to_storage(new)  # This now clears cache
+                    write_task_to_storage(new)
                     st.session_state.active_task_id = tid
                     st.success(f"Started at {now.strftime('%H:%M:%S')}")
-                    st.rerun()  # Force immediate refresh
+                    st.rerun()
 
         # ACTIVE TASK – SAFE ACCESS
         if st.session_state.active_task_id:
@@ -276,8 +284,47 @@ elif page == "2. Employee Tasks":
                     st.success(f"Finished – {mins:.1f} min")
                     st.rerun()
 
+        # TASK LOG WITH DELETE
         st.subheader("Task Log")
-        st.dataframe(tasks.sort_values("date", ascending=False), use_container_width=True)
+        if tasks.empty:
+            st.info("No tasks yet.")
+        else:
+            # Add delete column
+            disp = tasks.copy()
+            disp["delete"] = False
+            disp["status"] = disp["end_time"].apply(lambda x: "Completed" if pd.notna(x) else "Active")
+
+            edited = st.data_editor(
+                disp[["task_id", "date", "employee_name", "task_name", "status", "duration_minutes", "cost", "delete"]],
+                column_config={
+                    "delete": st.column_config.CheckboxColumn("Delete?", default=False),
+                    "task_id": st.column_config.TextColumn("ID", disabled=True),
+                    "date": st.column_config.DateColumn("Date"),
+                    "employee_name": st.column_config.TextColumn("Employee"),
+                    "task_name": st.column_config.TextColumn("Task"),
+                    "status": st.column_config.TextColumn("Status"),
+                    "duration_minutes": st.column_config.NumberColumn("Mins", format="%.1f"),
+                    "cost": st.column_config.NumberColumn("Cost", format="$%.2f"),
+                },
+                hide_index=True,
+                key="task_log_editor"
+            )
+
+            if st.button("Apply Deletions", type="primary"):
+                deleted = []
+                for _, row in edited.iterrows():
+                    if row["delete"]:
+                        if row["status"] == "Active":
+                            st.warning(f"Cannot delete active task: {row['task_id']}")
+                        else:
+                            deleted.append(row["task_id"])
+                if deleted:
+                    for tid in deleted:
+                        delete_task_from_storage(tid)
+                    st.success(f"Deleted {len(deleted)} task(s)")
+                    st.rerun()
+                else:
+                    st.info("No tasks selected for deletion.")
 
 # -------------------------------
 # PAGE 3 – ADMIN
