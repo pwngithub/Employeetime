@@ -22,7 +22,7 @@ TIMEZONE = pytz.timezone('America/New_York')
 # -------------------------------
 # CONSTANTS – ORDER MATTERS!
 # -------------------------------
-EMPLOYEE_COLUMNS = ["employee_id", "name", "role", "hourly_rate"]  # ID first!
+EMPLOYEE_COLUMNS = ["employee_id", "name", "role", "hourly_rate"]
 TASK_TYPE_COLUMNS = ["task_type_id", "task_name", "category"]
 TASK_COLUMNS = [
     "task_id","date","employee_id","employee_name","task_type_id",
@@ -63,8 +63,8 @@ def _github_cfg():
         "token": cfg.get("token"),
         "repo": cfg.get("repo"),
         "branch": cfg.get("branch", "main"),
-        "task_file": cfg.get("file_path", "data/tasks.csv"),
-        "emp_file": cfg.get("employee_file_path", "data/employees.csv"),
+        "task_file": cfg.get("file_path", "Data/tasks.csv"),
+        "emp_file": cfg.get("employee_file_path", "Data/employees.csv"),
     }
 
 def _github_put(df: pd.DataFrame, file_path: str, msg: str) -> bool:
@@ -99,7 +99,7 @@ def _github_put(df: pd.DataFrame, file_path: str, msg: str) -> bool:
 
         put = requests.put(url, headers=headers, json=payload)
         if put.status_code in (200, 201):
-            st.success(f"GitHub → {file_path}")
+            st.success(f"Synced → {file_path}")
             return True
         else:
             st.error(f"GitHub error: {put.json().get('message')}")
@@ -320,40 +320,44 @@ elif page == "3. Admin":
             # ---------- EMPLOYEES ----------
             if section == "Employees":
                 st.header("Employees")
-                emps = get_employees()
-                tasks = get_tasks()
+                emps = get_employees().copy()  # Fresh copy
+                tasks = get_tasks().copy()
 
                 # ADD / UPDATE
                 with st.form("add_emp", clear_on_submit=True):
                     c1, c2 = st.columns(2)
                     with c1:
-                        name = st.text_input("Name")
-                        role = st.text_input("Role", value="Technician")
+                        name = st.text_input("Name", key="add_name")
+                        role = st.text_input("Role", value="Technician", key="add_role")
                     with c2:
-                        rate = st.number_input("Hourly Rate", min_value=0.0, step=0.5, value=25.0)
-                        eid = st.text_input("Employee ID (optional)").strip()
-                    if st.form_submit_button("Save"):
-                        if not name:
-                            st.warning("Name required")
+                        rate = st.number_input("Hourly Rate", min_value=0.0, step=0.5, value=25.0, key="add_rate")
+                        eid = st.text_input("Employee ID (optional)", key="add_eid").strip()
+                    if st.form_submit_button("Save Employee"):
+                        if not name.strip():
+                            st.warning("Name is required.")
                         else:
                             if not eid:
                                 eid = f"E{int(datetime.now(TIMEZONE).timestamp())}"
-                            new_row = pd.DataFrame([{"employee_id": eid, "name": name, "role": role, "hourly_rate": rate}])
+                            new_row = {"employee_id": eid, "name": name.strip(), "role": role.strip(), "hourly_rate": rate}
+
                             if eid in emps["employee_id"].values:
-                                emps.loc[emps["employee_id"] == eid] = new_row.iloc[0]
-                                st.success("Updated")
+                                emps = emps[emps["employee_id"] != eid]
+                                st.success(f"Updated **{name}**")
                             else:
-                                emps = pd.concat([emps, new_row], ignore_index=True)
-                                st.success("Added")
+                                st.success(f"Added **{name}**")
+
+                            emps = pd.concat([emps, pd.DataFrame([new_row])], ignore_index=True)
+
                             if write_employees_to_github(emps):
                                 clear_cache()
+                                st.rerun()
                             else:
                                 st.error("GitHub sync failed")
 
                 # EDIT / DELETE TABLE
                 st.subheader("Current Employees")
                 if emps.empty:
-                    st.info("No employees")
+                    st.info("No employees yet. Add one above.")
                 else:
                     disp = emps.copy()
                     disp["delete"] = False
@@ -371,39 +375,41 @@ elif page == "3. Admin":
                         key="emp_editor"
                     )
 
-                    if st.button("Apply Changes (Edit/Delete)", type="primary"):
+                    if st.button("Apply Changes", type="primary"):
+                        to_save = emps.copy()
                         deleted = []
+
                         for _, row in edited.iterrows():
-                            idx = emps[emps["employee_id"] == row["employee_id"]].index[0]
+                            idx = to_save[to_save["employee_id"] == row["employee_id"]].index[0]
                             if row["delete"]:
-                                task_count = tasks[tasks["employee_id"] == row["employee_id"]].shape[0]
+                                task_count = len(tasks[tasks["employee_id"] == row["employee_id"]])
                                 if task_count:
-                                    st.warning(f"**{row['name']}** has {task_count} task(s). History preserved.")
+                                    st.warning(f"**{row['name']}** has {task_count} task(s). History kept.")
                                 deleted.append(idx)
                             else:
-                                emps.loc[idx, ["name", "role", "hourly_rate"]] = [row["name"], row["role"], row["hourly_rate"]]
+                                to_save.loc[idx, ["name", "role", "hourly_rate"]] = [row["name"], row["role"], row["hourly_rate"]]
+
                         if deleted:
-                            emps = emps.drop(index=deleted).reset_index(drop=True)
+                            to_save = to_save.drop(index=deleted).reset_index(drop=True)
                             st.success(f"Deleted {len(deleted)} employee(s)")
-                        if write_employees_to_github(emps):
+
+                        if write_employees_to_github(to_save):
                             clear_cache()
                             st.success("Synced to GitHub")
+                            st.rerun()
                         else:
                             st.error("GitHub sync failed")
 
-                # FORCE SYNC
-                if st.button("Force Sync Employees to GitHub", type="secondary"):
-                    df = get_employees()[EMPLOYEE_COLUMNS]
-                    st.code(df.to_csv(index=False))
-                    if write_employees_to_github(df):
-                        st.success("Force sync successful!")
-                    else:
-                        st.error("Force sync failed")
-
-                # DEBUG
-                if st.button("Show CSV that will be sent to GitHub"):
-                    df = get_employees()[EMPLOYEE_COLUMNS]
-                    st.code(df.to_csv(index=False))
+                # SYNC & DEBUG
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Force Sync to GitHub"):
+                        df = get_employees()[EMPLOYEE_COLUMNS]
+                        st.code(df.to_csv(index=False))
+                        write_employees_to_github(df)
+                with col2:
+                    if st.button("Show CSV"):
+                        st.code(get_employees()[EMPLOYEE_COLUMNS].to_csv(index=False))
 
             # ---------- REPORTS ----------
             else:
