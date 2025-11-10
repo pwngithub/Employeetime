@@ -15,6 +15,8 @@ DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 
 TASKS_FILE = DATA_DIR / "tasks.csv"
+EMPLOYEES_FILE = DATA_DIR / "employees.csv"
+TASKLIST_FILE = DATA_DIR / "Tasklist.csv"
 TIMEZONE = pytz.timezone('America/New_York')
 
 # -------------------------------
@@ -98,14 +100,11 @@ def _github_put(df: pd.DataFrame, file_path: str, msg: str) -> bool:
 
         put = requests.put(url, headers=headers, json=payload)
         if put.status_code in (200, 201):
-            st.success(f"Synced to {file_path}")
-            return True
+            return True, f"Synced {file_path}"
         else:
-            st.error(f"GitHub error: {put.json().get('message')}")
-            return False
+            return False, f"GitHub error: {put.json().get('message')}"
     except Exception as e:
-        st.error(f"GitHub push failed: {e}")
-        return False
+        return False, f"Push failed: {e}"
 
 # -------------------------------
 # WRITE & DELETE FUNCTIONS
@@ -114,17 +113,32 @@ def write_task_to_github(task: dict) -> bool:
     df = pd.read_csv(TASKS_FILE) if TASKS_FILE.exists() else pd.DataFrame(columns=TASK_COLUMNS)
     df = pd.concat([df, pd.DataFrame([task])], ignore_index=True)
     save_csv(df, TASKS_FILE)
-    return _github_put(df, _github_cfg()["task_file"], f"Append task {task['task_id']}")
+    success, msg = _github_put(df, _github_cfg()["task_file"], f"Append task {task['task_id']}")
+    if success:
+        st.success(msg)
+    else:
+        st.error(msg)
+    return success
 
 def write_employees_to_github(emp_df: pd.DataFrame) -> bool:
     df = emp_df[EMPLOYEE_COLUMNS].copy()
-    save_csv(df, DATA_DIR / "employees.csv")
-    return _github_put(df, _github_cfg()["emp_file"], f"Update employees – {datetime.now(TIMEZONE).isoformat()}")
+    save_csv(df, EMPLOYEES_FILE)
+    success, msg = _github_put(df, _github_cfg()["emp_file"], f"Update employees – {datetime.now(TIMEZONE).isoformat()}")
+    if success:
+        st.success(msg)
+    else:
+        st.error(msg)
+    return success
 
 def write_tasklist_to_github(df: pd.DataFrame) -> bool:
     df = df[TASKLIST_COLUMNS].copy()
-    save_csv(df, DATA_DIR / "Tasklist.csv")
-    return _github_put(df, _github_cfg()["tasklist_file"], f"Update Tasklist – {datetime.now(TIMEZONE).isoformat()}")
+    save_csv(df, TASKLIST_FILE)
+    success, msg = _github_put(df, _github_cfg()["tasklist_file"], f"Update Tasklist – {datetime.now(TIMEZONE).isoformat()}")
+    if success:
+        st.success(msg)
+    else:
+        st.error(msg)
+    return success
 
 def delete_task_from_storage(task_id: str) -> bool:
     df = pd.read_csv(TASKS_FILE) if TASKS_FILE.exists() else pd.DataFrame(columns=TASK_COLUMNS)
@@ -132,7 +146,12 @@ def delete_task_from_storage(task_id: str) -> bool:
         df = df[df["task_id"] != task_id]
         save_csv(df, TASKS_FILE)
         get_tasks.clear()
-        return _github_put(df, _github_cfg()["task_file"], f"Deleted task {task_id}")
+        success, msg = _github_put(df, _github_cfg()["task_file"], f"Deleted task {task_id}")
+        if success:
+            st.success(msg)
+        else:
+            st.error(msg)
+        return success
     return False
 
 def write_task_to_storage(task: dict):
@@ -289,14 +308,11 @@ elif page == "2. Employee Tasks":
         if tasks.empty:
             st.info("No tasks yet.")
         else:
-            # PREPARE DISPLAY COPY
             disp = tasks.copy()
             disp["status"] = disp["end_time"].apply(lambda x: "Completed" if pd.notna(x) else "Active")
             disp["duration_minutes"] = disp["duration_minutes"].fillna(0.0)
             disp["cost"] = disp["cost"].fillna(0.0)
             disp["delete"] = False
-
-            # FIX: Convert date string to datetime.date
             disp["date"] = pd.to_datetime(disp["date"], errors="coerce").dt.date
 
             edited = st.data_editor(
@@ -360,12 +376,14 @@ elif page == "3. Admin":
                 st.rerun()
             st.success("Admin Mode")
 
-            # GITHUB TEST BUTTONS
-            st.subheader("GitHub Connection Test")
+            # GITHUB CONNECTION TEST + SYNC
+            st.subheader("GitHub Connection Test & Sync")
             c1, c2, c3 = st.columns(3)
+            cfg = _github_cfg()
+
+            # --- TASKS CSV ---
             with c1:
                 if st.button("Test Tasks CSV"):
-                    cfg = _github_cfg()
                     r = requests.get(
                         f"https://api.github.com/repos/{cfg['repo']}/contents/{cfg['task_file']}?ref={cfg['branch']}",
                         headers={"Authorization": f"token {cfg['token']}"}
@@ -377,9 +395,20 @@ elif page == "3. Admin":
                         st.info("Not created yet")
                     else:
                         st.error("Failed")
+                if st.button("Sync Tasks CSV", type="primary"):
+                    if TASKS_FILE.exists():
+                        df = pd.read_csv(TASKS_FILE)
+                        success, msg = _github_put(df, cfg["task_file"], f"Manual sync tasks – {datetime.now(TIMEZONE).isoformat()}")
+                        if success:
+                            st.success(msg)
+                        else:
+                            st.error(msg)
+                    else:
+                        st.warning("No local tasks.csv")
+
+            # --- EMPLOYEES CSV ---
             with c2:
                 if st.button("Test Employees CSV"):
-                    cfg = _github_cfg()
                     r = requests.get(
                         f"https://api.github.com/repos/{cfg['repo']}/contents/{cfg['emp_file']}?ref={cfg['branch']}",
                         headers={"Authorization": f"token {cfg['token']}"}
@@ -391,9 +420,20 @@ elif page == "3. Admin":
                         st.info("Not created yet")
                     else:
                         st.error("Failed")
+                if st.button("Sync Employees CSV", type="primary"):
+                    if EMPLOYEES_FILE.exists():
+                        df = pd.read_csv(EMPLOYEES_FILE)
+                        success, msg = _github_put(df, cfg["emp_file"], f"Manual sync employees – {datetime.now(TIMEZONE).isoformat()}")
+                        if success:
+                            st.success(msg)
+                        else:
+                            st.error(msg)
+                    else:
+                        st.warning("No local employees.csv")
+
+            # --- TASKLIST CSV ---
             with c3:
                 if st.button("Test Tasklist CSV"):
-                    cfg = _github_cfg()
                     r = requests.get(
                         f"https://api.github.com/repos/{cfg['repo']}/contents/{cfg['tasklist_file']}?ref={cfg['branch']}",
                         headers={"Authorization": f"token {cfg['token']}"}
@@ -405,7 +445,18 @@ elif page == "3. Admin":
                         st.info("Not created yet")
                     else:
                         st.error("Failed")
+                if st.button("Sync Tasklist CSV", type="primary"):
+                    if TASKLIST_FILE.exists():
+                        df = pd.read_csv(TASKLIST_FILE)
+                        success, msg = _github_put(df, cfg["tasklist_file"], f"Manual sync tasklist – {datetime.now(TIMEZONE).isoformat()}")
+                        if success:
+                            st.success(msg)
+                        else:
+                            st.error(msg)
+                    else:
+                        st.warning("No local Tasklist.csv")
 
+            # ADMIN SECTIONS
             section = st.radio("Section", ["Employees", "Reports"], key="admin_sec")
 
             if section == "Employees":
