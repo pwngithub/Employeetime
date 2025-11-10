@@ -2,3 +2,4 @@ task_id,date,employee_id,employee_name,task_type_id,task_name,task_category,cust
 T1762796437,2025-11-10,E1762792970,Aidan,TT_SALES_1,Sales – First Contact Reply,Sales,,,2025-11-10T12:40:37.765844-05:00,,,
 T1762796451,2025-11-10,E1762792970,Aidan,TT_SALES_1,Sales – First Contact Reply,Sales,,,2025-11-10T12:40:51.610150-05:00,,,
 T1762796538,2025-11-10,E1762793067,Billy,TT_1762795325,Support - Customer call,Support,test 2,,2025-11-10T12:42:18.572775-05:00,,,
+T1762797281,2025-11-10,E1762792970,Aidan,TT_SALES_1,Sales – First Contact Reply,Sales,test,,2025-11-10T12:54:41.322136-05:00,,,
