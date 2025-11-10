@@ -296,12 +296,15 @@ elif page == "2. Employee Tasks":
             disp["cost"] = disp["cost"].fillna(0.0)
             disp["delete"] = False
 
+            # FIX: Convert date string to datetime.date
+            disp["date"] = pd.to_datetime(disp["date"], errors="coerce").dt.date
+
             edited = st.data_editor(
                 disp[["task_id", "date", "employee_name", "task_name", "status", "duration_minutes", "cost", "delete"]],
                 column_config={
                     "delete": st.column_config.CheckboxColumn("Delete?", default=False),
                     "task_id": st.column_config.TextColumn("ID", disabled=True),
-                    "date": st.column_config.DateColumn("Date"),
+                    "date": st.column_config.DateColumn("Date", disabled=True),
                     "employee_name": st.column_config.TextColumn("Employee"),
                     "task_name": st.column_config.TextColumn("Task"),
                     "status": st.column_config.TextColumn("Status"),
@@ -408,7 +411,6 @@ elif page == "3. Admin":
             if section == "Employees":
                 st.header("Employees")
                 emps = get_employees().copy()
-                tasks = get_tasks()
 
                 with st.form("add_emp", clear_on_submit=True):
                     c1,c2 = st.columns(2)
