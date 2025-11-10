@@ -1,5 +1,1 @@
 task_id,date,employee_id,employee_name,task_type_id,task_name,task_category,customer,task_description,start_time,end_time,duration_minutes,cost
-T1762787635,2025-11-10,E_TEST,Test User,TT_TEST,Test Task,Test,Test Customer,Debug write,2025-11-10T10:13:55.673522-05:00,2025-11-10T10:13:55.673531-05:00,10.0,5.0
-T1762787659,2025-11-10,E1762787655,Aidan,TT_SALES_1,Sales – First Contact Reply,Sales,,,2025-11-10T10:14:19.578397-05:00,2025-11-10T10:14:25.108759-05:00,0.0921727,0.03
-T1762788327,2025-11-10,E_TEST,Test User,TT_TEST,Test Task,Test,Test Customer,Debug write,2025-11-10T10:25:27.181633-05:00,2025-11-10T10:25:27.181643-05:00,10.0,5.0
-T1762788516,2025-11-10,E1762787655,Aidan,TT_SALES_1,Sales – First Contact Reply,Sales,,,2025-11-10T10:28:36.377736-05:00,2025-11-10T10:28:41.750347-05:00,0.08954351666666667,0.03
