@@ -7,24 +7,12 @@ import base64
 import requests
 from io import StringIO
 
-try:
-    from google.oauth2.service_account import Credentials
-    from googleapiclient.discovery import build
-    GSHEETS_AVAILABLE = True
-    st.info("Google Sheets API libraries loaded.")
-except ImportError:
-    GSHEETS_AVAILABLE = False
-    st.warning(
-        "Google Sheets API libraries not installed. Falling back to GitHub CSV.\n\n"
-        "Add 'google-api-python-client>=2.0.0' and 'google-auth>=2.0.0' to requirements.txt to enable Google Sheets."
-    )
-
 # -------------------------------
 # CONFIGURATION
 # -------------------------------
 st.set_page_config(
     page_title="Employee & Sales Task Tracker",
-    page_icon="⏱️",
+    page_icon="Timer",
     layout="wide",
 )
 DATA_DIR = Path("data")
@@ -33,6 +21,7 @@ EMPLOYEE_FILE = DATA_DIR / "employees.csv"
 TASKS_FILE = DATA_DIR / "tasks.csv"
 TASK_TYPES_FILE = DATA_DIR / "task_types.csv"
 TIMEZONE = pytz.timezone('America/New_York')  # Adjust to your timezone
+
 # -------------------------------
 # CONSTANTS
 # -------------------------------
@@ -53,6 +42,7 @@ TASK_COLUMNS = [
     "duration_minutes",
     "cost",
 ]
+
 # -------------------------------
 # HELPERS
 # -------------------------------
@@ -86,60 +76,6 @@ def create_default_task_types() -> pd.DataFrame:
     return pd.DataFrame(defaults, columns=TASK_TYPE_COLUMNS)
 
 # -------------------------------
-# GOOGLE SHEETS HELPERS
-# -------------------------------
-@st.cache_resource
-def connect_gsheet_api():
-    if not GSHEETS_AVAILABLE:
-        st.error("Google Sheets API libraries not installed. Using GitHub CSV.")
-        return None
-    try:
-        creds_dict = st.secrets.get("gcp_service_account", {})
-        if not creds_dict:
-            st.error("Missing [gcp_service_account] in Streamlit secrets.")
-            return None
-        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        service = build("sheets", "v4", credentials=creds)
-        return service
-    except Exception as e:
-        st.error(f"Google Sheets API Connection Error: {e}")
-        return None
-
-def write_task_to_gsheet_api(task_data: dict):
-    service = connect_gsheet_api()
-    if not service:
-        return False
-    try:
-        sheet_cfg = st.secrets.get("google_sheet", {})
-        sheet_id = sheet_cfg.get("sheet_id", "1RVRUtL-y-F5e5KCqpdDQkN6voBIiGSvHjX_9fMNANqI")
-        worksheet_name = sheet_cfg.get("worksheet_name", "Tasks")
-        # Check if headers exist
-        result = service.spreadsheets().values().get(
-            spreadsheetId=sheet_id, range=f"{worksheet_name}!A1:Z1"
-        ).execute()
-        if not result.get("values"):
-            service.spreadsheets().values().update(
-                spreadsheetId=sheet_id,
-                range=f"{worksheet_name}!A1",
-                valueInputOption="USER_ENTERED",
-                body={"values": [TASK_COLUMNS]},
-            ).execute()
-        # Append task
-        row = [str(task_data.get(col, "")) for col in TASK_COLUMNS]
-        service.spreadsheets().values().append(
-            spreadsheetId=sheet_id,
-            range=f"{worksheet_name}!A1",
-            valueInputOption="USER_ENTERED",
-            body={"values": [row]},
-        ).execute()
-        st.success(f"Appended task to Google Sheet (Worksheet: {worksheet_name}).")
-        return True
-    except Exception as e:
-        st.error(f"Failed to write to Google Sheet: {e}")
-        return False
-
-# -------------------------------
 # GITHUB CSV HELPERS
 # -------------------------------
 def write_task_to_github(task_data: dict):
@@ -165,7 +101,6 @@ def write_task_to_github(task_data: dict):
                 st.write("Response:", content_data)
                 return False
             content = base64.b64decode(content_data["content"]).decode("utf-8")
-            st.write(f"GitHub GET: File found, SHA: {content_data.get('sha', 'N/A')}, Content length: {len(content)}")
             if content.strip():
                 try:
                     df = pd.read_csv(StringIO(content))
@@ -175,10 +110,8 @@ def write_task_to_github(task_data: dict):
                     sha = content_data["sha"]
                 except Exception as e:
                     st.error(f"Failed to parse CSV content: {e}")
-                    st.write("Raw content:", content[:500])  # Show first 500 chars for debugging
+                    st.write("Raw content:", content[:500])
                     return False
-            else:
-                st.write("GitHub GET: File is empty, initializing new CSV.")
         elif response.status_code == 404:
             st.write("GitHub GET: File not found, creating new file.")
         else:
@@ -214,17 +147,9 @@ def write_task_to_github(task_data: dict):
 
 def write_task_to_storage(task_data: dict):
     st.write(f"Attempting to write task {task_data.get('task_id', 'unknown')} to storage.")
-    success = False
-    if GSHEETS_AVAILABLE:
-        success = write_task_to_gsheet_api(task_data)
-        if success:
-            st.write("Google Sheets write successful.")
+    success = write_task_to_github(task_data)
     if not success:
-        success = write_task_to_github(task_data)
-        if success:
-            st.write("GitHub CSV write successful.")
-    if not success:
-        st.error("Failed to write to both Google Sheets and GitHub CSV. Task saved locally.")
+        st.error("Failed to write to GitHub CSV. Task saved locally only.")
 
 # -------------------------------
 # DATA LOADERS (CACHED)
@@ -261,13 +186,13 @@ def refresh_tasks_cache():
 # -------------------------------
 # SIDEBAR NAVIGATION
 # -------------------------------
-st.sidebar.title("⏱️ Task Tracker")
+st.sidebar.title("Timer Task Tracker")
 page = st.sidebar.radio(
     label="Go to",
     options=[
-        "1️⃣ Task List",
-        "2️⃣ Employee Tasks",
-        "3️⃣ Admin",
+        "1. Task List",
+        "2. Employee Tasks",
+        "3. Admin",
     ],
     index=1,
     key="main_nav",
@@ -276,7 +201,7 @@ page = st.sidebar.radio(
 # -------------------------------
 # PAGE 1: TASK LIST (LIBRARY)
 # -------------------------------
-if page == "1️⃣ Task List":
+if page == "1. Task List":
     st.title("Task Library")
     task_types = get_task_types()
     st.subheader("Add / Update Task Type")
@@ -323,7 +248,7 @@ if page == "1️⃣ Task List":
 # -------------------------------
 # PAGE 2: EMPLOYEE TASKS
 # -------------------------------
-elif page == "2️⃣ Employee Tasks":
+elif page == "2. Employee Tasks":
     st.title("Employee Tasks (Start/Finish Timer)")
     employees = get_employees()
     task_types = get_task_types()
@@ -344,7 +269,7 @@ elif page == "2️⃣ Employee Tasks":
             with col2:
                 customer = st.text_input("Customer / Lead (optional)")
                 desc = st.text_area("Notes", placeholder="Optional notes...")
-            start_submitted = st.form_submit_button("▶️ Start Task")
+            start_submitted = st.form_submit_button("Start Task")
             if start_submitted:
                 if st.session_state["active_task_id"]:
                     st.error("A task is already running. Finish it first.")
@@ -405,7 +330,7 @@ elif page == "2️⃣ Employee Tasks":
                 with c3:
                     st.write("**Notes:**")
                     st.write(row["task_description"])
-                if st.button("⏹️ Finish Task", key="finish_btn"):
+                if st.button("Finish Task", key="finish_btn"):
                     end_dt = datetime.now(TIMEZONE)
                     emp = employees[employees["employee_id"] == row["employee_id"]].iloc[0]
                     minutes = (end_dt - start_dt).total_seconds() / 60
@@ -420,7 +345,7 @@ elif page == "2️⃣ Employee Tasks":
                     st.session_state["active_task_id"] = None
                     st.success(
                         f"Task finished. Duration {minutes:.1f} minutes. "
-                        "Logged to local CSV and Google Sheet/GitHub (if configured)."
+                        "Logged to local CSV and GitHub (if configured)."
                     )
                     st.rerun()
         st.subheader("Task Log")
@@ -434,7 +359,7 @@ elif page == "2️⃣ Employee Tasks":
 # -------------------------------
 # PAGE 3: ADMIN
 # -------------------------------
-elif page == "3️⃣ Admin":
+elif page == "3. Admin":
     st.title("Admin Area")
     admin_users = st.secrets.get("admin_users", None)
     if admin_users is None:
@@ -468,25 +393,7 @@ elif page == "3️⃣ Admin":
                 st.session_state["admin_username"] = None
                 st.rerun()
             st.subheader("Storage Status")
-            if st.button("🔍 Test Google Sheets Connection"):
-                service = connect_gsheet_api()
-                if service:
-                    sheet_cfg = st.secrets.get("google_sheet", {})
-                    sheet_id = sheet_cfg.get("sheet_id", "1RVRUtL-y-F5e5KCqpdDQkN6voBIiGSvHjX_9fMNANqI")
-                    worksheet_name = sheet_cfg.get("worksheet_name", "Tasks")
-                    try:
-                        result = service.spreadsheets().values().get(
-                            spreadsheetId=sheet_id, range=f"{worksheet_name}!A1:Z1"
-                        ).execute()
-                        row_count = len(service.spreadsheets().values().get(
-                            spreadsheetId=sheet_id, range=worksheet_name
-                        ).execute().get("values", []))
-                        st.success(f"Connected! Sheet ID: {sheet_id}, Worksheet: {worksheet_name}, Rows: {row_count}")
-                    except Exception as e:
-                        st.error(f"Test failed: {e}")
-                else:
-                    st.error("Google Sheets connection failed. Check secrets or library installation.")
-            if st.button("🔍 Test GitHub Connection"):
+            if st.button("Test GitHub Connection"):
                 github_cfg = st.secrets.get("github", {})
                 token = github_cfg.get("token")
                 repo = github_cfg.get("repo")
@@ -505,7 +412,6 @@ elif page == "3️⃣ Admin":
                             st.write("Response:", content_data)
                         else:
                             content = base64.b64decode(content_data["content"]).decode("utf-8")
-                            st.write(f"GitHub GET: File found, Content length: {len(content)}")
                             if content.strip():
                                 try:
                                     df = pd.read_csv(StringIO(content))
@@ -521,7 +427,7 @@ elif page == "3️⃣ Admin":
             # Debug and Test Write
             col1, col2 = st.columns(2)
             with col1:
-                if st.button("🔧 Debug Pending Tasks"):
+                if st.button("Debug Pending Tasks"):
                     pending = st.session_state.get("pending_tasks", [])
                     st.write(f"Pending tasks: {len(pending)}")
                     if pending:
@@ -529,7 +435,7 @@ elif page == "3️⃣ Admin":
                     else:
                         st.info("No pending tasks.")
             with col2:
-                if st.button("💾 Test Write to GitHub"):
+                if st.button("Test Write to GitHub"):
                     dummy_task = {
                         "task_id": f"T{int(datetime.now(TIMEZONE).timestamp())}",
                         "date": datetime.now(TIMEZONE).date().isoformat(),
@@ -791,7 +697,7 @@ elif page == "3️⃣ Admin":
                                     ],
                                     key="raw_task_editor",
                                 )
-                                if st.button("💾 Save Task Changes", key="save_task_changes"):
+                                if st.button("Save Task Changes", key="save_task_changes"):
                                     employees_all = get_employees()
                                     delete_indices = []
                                     for orig_idx, (_, row) in zip(
@@ -829,7 +735,7 @@ elif page == "3️⃣ Admin":
                                         msg += f" Deleted {len(delete_indices)} task(s)."
                                     st.success(msg)
                                     st.warning(
-                                        "Note: Edits/Deletions here do not affect Google Sheets or GitHub, "
-                                        "which are append-only."
+                                        "Note: Edits/Deletions here do not affect GitHub, "
+                                        "which is append-only."
                                     )
                                     st.rerun()
