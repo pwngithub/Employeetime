@@ -1,5 +1,4 @@
 task_type_id,task_name,category
-,,
 TT_SALES_1,Sales – First Contact Reply,Sales
 TT_SALES_2,Sales – Schedule Site Survey,Sales
 TT_OPS_1,Construction – Pull Fiber,Construction
