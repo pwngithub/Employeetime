@@ -198,7 +198,7 @@ if page == "1. Task List":
     st.dataframe(tasklist[["task_type_id", "task_name", "category"]], use_container_width=True)
 
 # -------------------------------
-# PAGE 2 – EMPLOYEE TASKS (MULTI-USER + DATE FIX)
+# PAGE 2 – EMPLOYEE TASKS (MULTI-USER + DATE FIXED)
 # -------------------------------
 elif page == "2. Employee Tasks":
     st.title("Employee Tasks")
@@ -293,8 +293,8 @@ elif page == "2. Employee Tasks":
         else:
             disp = tasks.copy()
             disp["status"] = disp["end_time"].apply(lambda x: "Completed" if pd.notna(x) else "Active")
-            disp["date_for_editor"] = disp["date"]
-            disp["date"] = disp["date"].dt.date
+            disp["date_for_editor"] = disp["date"]  # Keep full Timestamp
+            disp["date"] = disp["date"].dt.date     # For internal use only
 
             if "task_log_df" not in st.session_state:
                 st.session_state.task_log_df = disp
