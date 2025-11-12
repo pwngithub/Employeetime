@@ -290,25 +290,32 @@ elif page == "2. Employee Tasks":
                     st.session_state.active_task_id = None
                     st.rerun()
 
-        # === TASK LOG (DATE FIXED) ===
+                # === TASK LOG (DATE FIXED + DELETE SAFE) ===
         st.subheader("Task Log")
         if tasks.empty:
             st.info("No tasks yet.")
         else:
+            # ---- ALWAYS rebuild from fresh tasks ----
             disp = tasks.copy()
             disp["status"] = disp["end_time"].apply(lambda x: "Completed" if pd.notna(x) else "Active")
-            disp["date_for_editor"] = disp["date"]  # Keep full Timestamp
-            disp["date"] = disp["date"].dt.date     # Optional: for internal use
+            disp["date_for_editor"] = disp["date"]          # keep Timestamp
+            disp["date"] = disp["date"].dt.date             # optional
             disp["delete"] = False
 
+            # ---- Sync session_state with fresh data ----
             if "task_log_df" not in st.session_state:
                 st.session_state.task_log_df = disp
-
-            if st.session_state.task_log_df.shape[0] != tasks.shape[0]:
-                st.session_state.task_log_df = disp
+            else:
+                # Keep user edits (checkboxes) when row count matches
+                if st.session_state.task_log_df.shape[0] == disp.shape[0]:
+                    # Re-attach delete column if it exists
+                    if "delete" in st.session_state.task_log_df.columns:
+                        disp["delete"] = st.session_state.task_log_df["delete"].values
+                else:
+                    st.session_state.task_log_df = disp   # reset if rows changed
 
             edited = st.data_editor(
-                st.session_state.task_log_df[[
+                disp[[
                     "task_id", "date_for_editor", "employee_name", "customer",
                     "task_name", "status", "duration_minutes", "cost", "delete"
                 ]].rename(columns={"date_for_editor": "date"}),
@@ -325,7 +332,10 @@ elif page == "2. Employee Tasks":
                 key="task_log_editor"
             )
 
-            st.session_state.task_log_df = edited
+            # Save edited delete checkboxes back
+            st.session_state.task_log_df = edited.copy()
+            # Re-attach full Timestamp for next loop
+            st.session_state.task_log_df["date_for_editor"] = tasks["date"]
 
             if st.button("Delete Selected Tasks", type="primary"):
                 to_delete = edited[edited["delete"] == True]["task_id"].tolist()
