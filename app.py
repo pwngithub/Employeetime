@@ -577,25 +577,42 @@ elif page == "3. Admin":
             if tasks.empty:
                 st.info("No tasks in GitHub.")
             else:
+                # Ensure tasks['date'] is datetime; if missing, derive from start_time
+                date_series = pd.to_datetime(tasks["date"], errors="coerce")
+
+                if "start_time" in tasks.columns:
+                    missing = date_series.isna() & tasks["start_time"].notna()
+                    if missing.any():
+                        date_series.loc[missing] = pd.to_datetime(
+                            tasks.loc[missing, "start_time"], errors="coerce"
+                        )
+
+                tasks["date"] = date_series
+
+                # Safe defaults for date inputs
+                if tasks["date"].notna().any():
+                    min_date = tasks["date"].min().date()
+                    max_date = tasks["date"].max().date()
+                else:
+                    today = datetime.now(TIMEZONE).date()
+                    min_date = today
+                    max_date = today
+
                 col1, col2 = st.columns(2)
                 with col1:
-                    start_date = st.date_input(
-                        "Start Date", value=tasks["date"].min().date()
-                    )
-                    end_date = st.date_input(
-                        "End Date", value=tasks["date"].max().date()
-                    )
+                    start_date = st.date_input("Start Date", value=min_date)
+                    end_date = st.date_input("End Date", value=max_date)
                 with col2:
                     selected_employee = st.selectbox(
                         "Employee",
-                        ["All"]
-                        + sorted(emps["name"].dropna().unique().tolist()),
+                        ["All"] + sorted(emps["name"].dropna().unique().tolist()),
                     )
                     selected_customer = st.selectbox(
                         "Customer",
                         ["All"]
                         + sorted(tasks["customer"].dropna().unique().tolist()),
                     )
+
                 task_options = (
                     ["All"]
                     + sorted(tasklist["task_name"].dropna().unique().tolist())
@@ -603,6 +620,8 @@ elif page == "3. Admin":
                 selected_task = st.selectbox("Task", task_options)
 
                 df = tasks.copy()
+                df["date"] = pd.to_datetime(df["date"], errors="coerce")
+
                 df = df[
                     (df["date"].dt.date >= start_date)
                     & (df["date"].dt.date <= end_date)
@@ -618,9 +637,7 @@ elif page == "3. Admin":
                     st.info("No data for selected filters.")
                 else:
                     today = datetime.now(TIMEZONE).date()
-                    today_df = df[
-                        pd.to_datetime(df["date"]).dt.date == today
-                    ]
+                    today_df = df[pd.to_datetime(df["date"]).dt.date == today]
                     c1, c2, c3, c4 = st.columns(4)
                     c1.metric(
                         "Hours (Today)",
@@ -739,9 +756,7 @@ elif page == "3. Admin":
                         )
                         .reset_index()
                     )
-                    dur = dur.sort_values(
-                        "avg_minutes", ascending=False
-                    )
+                    dur = dur.sort_values("avg_minutes", ascending=False)
                     fig = px.bar(
                         dur.head(20),
                         x="task_name",
@@ -799,9 +814,7 @@ elif page == "3. Admin":
                             ]
                         )
                     else:
-                        tabs = st.tabs(
-                            ["Employees", "Categories", "Tasks", "Weekly"]
-                        )
+                        tabs = st.tabs(["Employees", "Categories", "Tasks", "Weekly"])
 
                     with tabs[0]:
                         st.dataframe(emp_sum, use_container_width=True)
