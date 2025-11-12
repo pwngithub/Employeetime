@@ -401,35 +401,31 @@ elif page == "2. Employee Tasks":
                     st.session_state.active_task_id = None
                     st.rerun()
 
-        # === TASK LOG (DATE FIXED + DELETE SAFE) ===
+        # === TASK LOG (SIMPLE, RELIABLE DATE) ===
         st.subheader("Task Log")
+        tasks = get_tasks()
         if tasks.empty:
             st.info("No tasks yet.")
         else:
             disp = tasks.copy()
+
+            # Status column
             disp["status"] = disp["end_time"].apply(
                 lambda x: "Completed" if pd.notna(x) else "Active"
             )
 
-            # ensure datetime before using .dt
-            disp["date_for_editor"] = pd.to_datetime(disp["date"], errors="coerce")
-            disp["date"] = disp["date_for_editor"].dt.date
-            disp["delete"] = False
+            # Ensure 'date' is datetime, then downcast to plain date
+            disp["date"] = pd.to_datetime(disp["date"], errors="coerce")
+            disp["date"] = disp["date"].dt.date
 
-            if "task_log_df" not in st.session_state:
-                st.session_state.task_log_df = disp
-            else:
-                if st.session_state.task_log_df.shape[0] == disp.shape[0]:
-                    if "delete" in st.session_state.task_log_df.columns:
-                        disp["delete"] = st.session_state.task_log_df["delete"].values
-                else:
-                    st.session_state.task_log_df = disp
+            # Delete checkbox column
+            disp["delete"] = False
 
             edited = st.data_editor(
                 disp[
                     [
                         "task_id",
-                        "date_for_editor",
+                        "date",
                         "employee_name",
                         "customer",
                         "task_name",
@@ -438,7 +434,7 @@ elif page == "2. Employee Tasks":
                         "cost",
                         "delete",
                     ]
-                ].rename(columns={"date_for_editor": "date"}),
+                ],
                 column_config={
                     "task_id": st.column_config.TextColumn("ID", disabled=True),
                     "date": st.column_config.DateColumn("Date", disabled=True),
@@ -447,16 +443,13 @@ elif page == "2. Employee Tasks":
                         "Mins", format="%.1f"
                     ),
                     "cost": st.column_config.NumberColumn("Cost", format="$%.2f"),
-                    "delete": st.column_config.CheckboxColumn("Delete?", default=False),
+                    "delete": st.column_config.CheckboxColumn(
+                        "Delete?", default=False
+                    ),
                 },
                 hide_index=True,
                 use_container_width=True,
                 key="task_log_editor",
-            )
-
-            st.session_state.task_log_df = edited.copy()
-            st.session_state.task_log_df["date_for_editor"] = pd.to_datetime(
-                tasks["date"], errors="coerce"
             )
 
             if st.button("Delete Selected Tasks", type="primary"):
@@ -465,7 +458,9 @@ elif page == "2. Employee Tasks":
                     if st.session_state.active_task_id in to_delete:
                         st.error("Cannot delete active task!")
                         to_delete = [
-                            t for t in to_delete if t != st.session_state.active_task_id
+                            t
+                            for t in to_delete
+                            if t != st.session_state.active_task_id
                         ]
                     if to_delete:
                         delete_tasks_from_github(to_delete)
@@ -530,7 +525,7 @@ elif page == "3. Admin":
                 if st.button("Test Employees CSV"):
                     r = requests.get(
                         f"https://api.github.com/repos/{cfg['repo']}/contents/{cfg['emp_file']}?ref={cfg['branch']}",
-                        headers={"Authorization": f"token {cfg['token']}",},
+                        headers={"Authorization": f"token {cfg['token']}"},
                     )
                     st.write(
                         "Exists"
@@ -554,7 +549,7 @@ elif page == "3. Admin":
                 if st.button("Test Tasklist CSV"):
                     r = requests.get(
                         f"https://api.github.com/repos/{cfg['repo']}/contents/{cfg['tasklist_file']}?ref={cfg['branch']}",
-                        headers={"Authorization": f"token {cfg['token']}",}
+                        headers={"Authorization": f"token {cfg['token']}"},
                     )
                     st.write(
                         "Exists"
@@ -769,7 +764,7 @@ elif page == "3. Admin":
                                 tasks=("task_id", "count"),
                             )
                             .reset_index()
-                            .sort_values("hours", ascending=False)
+                            .sort_values("hours", descending=False)
                         )
                         colE, colF = st.columns(2)
                         with colE:
