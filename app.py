@@ -250,32 +250,44 @@ elif page == "2. Employee Tasks":
     if emps.empty or tasklist.empty:
         st.warning("Add employees/tasks in Admin")
     else:
+        # ---------------------------
+        # START TIMER FIRST (ONLY EMPLOYEE)
+        # ---------------------------
         with st.form("start_form", clear_on_submit=True):
-            c1, c2 = st.columns(2)
-            with c1:
-                emp_name = st.selectbox("Employee", emps["name"])
-                task_name = st.selectbox("Task", tasklist["task_name"])
-            with c2:
-                cust = st.text_input("Customer")
-            if st.form_submit_button("Start Task", disabled=st.session_state.active_task_id is not None):
+            emp_name = st.selectbox("Employee", emps["name"])
+            if st.form_submit_button(
+                "Start Timer",
+                disabled=st.session_state.active_task_id is not None,
+            ):
                 emp = emps[emps["name"] == emp_name].iloc[0]
-                typ = tasklist[tasklist["task_name"] == task_name].iloc[0]
                 now = datetime.now(TIMEZONE)
                 tid = f"T{str(uuid.uuid4())[:8]}"
+
+                # Start a new task with only employee + time.
+                # Task & customer will be added/edited while the timer runs.
                 new = {
-                    "task_id": tid, "date": now.date().isoformat(),
-                    "employee_id": emp["employee_id"], "employee_name": emp["name"],
-                    "task_type_id": typ["task_type_id"], "task_name": typ["task_name"],
-                    "task_category": typ["category"], "customer": cust,
-                    "task_description": "", "start_time": now.isoformat(),
-                    "end_time": None, "duration_minutes": None, "cost": None,
+                    "task_id": tid,
+                    "date": now.date().isoformat(),
+                    "employee_id": emp["employee_id"],
+                    "employee_name": emp["name"],
+                    "task_type_id": None,
+                    "task_name": "",
+                    "task_category": "Uncategorized",
+                    "customer": "",
+                    "task_description": "",
+                    "start_time": now.isoformat(),
+                    "end_time": None,
+                    "duration_minutes": None,
+                    "cost": None,
                 }
                 if write_task_to_github(new):
                     st.session_state.active_task_id = tid
-                    st.success("Task Started!")
+                    st.success("Timer Started!")
                     st.rerun()
 
-        # ACTIVE TASK WITH LIVE TIMER
+        # ---------------------------
+        # ACTIVE TASK WITH LIVE TIMER + TASK/CUSTOMER INPUTS
+        # ---------------------------
         if st.session_state.active_task_id:
             tasks = get_tasks()
             active_row = tasks[tasks["task_id"] == st.session_state.active_task_id]
@@ -286,37 +298,114 @@ elif page == "2. Employee Tasks":
                 hours, remainder = divmod(int(elapsed.total_seconds()), 3600)
                 minutes, seconds = divmod(remainder, 60)
 
+                # Timer card
                 st.markdown(
                     f"""
                     <div style="background-color:#e3f2fd;padding:20px;border-radius:12px;text-align:center;border:2px solid #1976d2;">
                         <h3>Active Task</h3>
-                        <p><b>{active['employee_name']}</b> – {active['task_name']}</p>
-                        <p>Customer: <b>{active['customer'] or 'N/A'}</b></p>
+                        <p><b>{active['employee_name']}</b></p>
                         <h2 style="color:#1976d2;font-family:monospace;">{hours:02d}:{minutes:02d}:{seconds:02d}</h2>
                     </div>
                     """,
-                    unsafe_allow_html=True
+                    unsafe_allow_html=True,
                 )
+
+                st.markdown("### Task Details (fill in before finishing)")
+
+                # Task + Customer inputs while timer is running
+                d1, d2 = st.columns(2)
+
+                # Build task options
+                task_names = sorted(tasklist["task_name"].dropna().unique().tolist())
+                task_options = ["-- Select Task --"] + task_names
+
+                # Default select index based on current active task_name
+                default_index = 0
+                if pd.notna(active["task_name"]) and active["task_name"] in task_names:
+                    default_index = task_options.index(active["task_name"])
+
+                with d1:
+                    selected_task = st.selectbox(
+                        "Task",
+                        task_options,
+                        index=default_index,
+                        key="active_task_select",
+                    )
+                with d2:
+                    customer_input = st.text_input(
+                        "Customer",
+                        value=active["customer"] or "",
+                        key="active_customer_input",
+                    )
 
                 col1, col2 = st.columns([1, 2])
                 with col1:
-                    if st.button("**FINISH TASK**", type="primary", use_container_width=True, key="finish_btn"):
+                    if st.button(
+                        "**FINISH TASK**",
+                        type="primary",
+                        use_container_width=True,
+                        key="finish_btn",
+                    ):
                         end = datetime.now(TIMEZONE)
                         mins = (end - start).total_seconds() / 60
-                        rate = float(emps[emps["employee_id"] == active["employee_id"]].iloc[0]["hourly_rate"])
+                        rate = float(
+                            emps[emps["employee_id"] == active["employee_id"]]
+                            .iloc[0]["hourly_rate"]
+                        )
                         cost = round((mins / 60) * rate, 2)
 
-                        df = get_tasks()
-                        df.loc[df["task_id"] == st.session_state.active_task_id, 
-                               ["end_time", "duration_minutes", "cost"]] = [end.isoformat(), mins, cost]
+                        # Determine final task info from selection
+                        final_task_name = active["task_name"]
+                        final_task_type_id = active["task_type_id"]
+                        final_task_category = active["task_category"]
 
-                        if _github_safe_put(df, _github_cfg()["task_file"], "Finish task", TASK_COLUMNS):
+                        if selected_task != "-- Select Task --":
+                            typ_row = tasklist[tasklist["task_name"] == selected_task]
+                            if not typ_row.empty:
+                                typ = typ_row.iloc[0]
+                                final_task_name = typ["task_name"]
+                                final_task_type_id = typ["task_type_id"]
+                                final_task_category = typ["category"]
+
+                        final_customer = (customer_input or "").strip()
+
+                        df = get_tasks()
+                        mask = df["task_id"] == st.session_state.active_task_id
+
+                        df.loc[mask, [
+                            "task_type_id",
+                            "task_name",
+                            "task_category",
+                            "customer",
+                            "end_time",
+                            "duration_minutes",
+                            "cost",
+                        ]] = [
+                            final_task_type_id,
+                            final_task_name,
+                            final_task_category,
+                            final_customer,
+                            end.isoformat(),
+                            mins,
+                            cost,
+                        ]
+
+                        if _github_safe_put(
+                            df,
+                            _github_cfg()["task_file"],
+                            "Finish task (with details)",
+                            TASK_COLUMNS,
+                        ):
                             st.session_state.active_task_id = None
                             clear_cache()
-                            st.success("Task Finished!")
+                            st.success("Task Finished & Logged!")
                             st.rerun()
                 with col2:
-                    if st.button("Cancel Active Task", type="secondary", use_container_width=True):
+                    if st.button(
+                        "Cancel Active Task",
+                        type="secondary",
+                        use_container_width=True,
+                    ):
                         st.session_state.active_task_id = None
                         st.rerun()
             else:
@@ -325,33 +414,56 @@ elif page == "2. Employee Tasks":
                     st.session_state.active_task_id = None
                     st.rerun()
 
-        # === TASK LOG (Date derived from start_time) ===
+        # ---------------------------
+        # TASK LOG (unchanged, date from start_time)
+        # ---------------------------
         st.subheader("Task Log")
         tasks = get_tasks()
         if tasks.empty:
             st.info("No tasks yet.")
         else:
             disp = tasks.copy()
-            disp["status"] = disp["end_time"].apply(lambda x: "Completed" if pd.notna(x) else "Active")
+
+            # Status column
+            disp["status"] = disp["end_time"].apply(
+                lambda x: "Completed" if pd.notna(x) else "Active"
+            )
+
+            # Use start_time to derive Date for display
             disp["date"] = pd.to_datetime(disp["start_time"], errors="coerce").dt.date
+
+            # Delete checkbox column
             disp["delete"] = False
 
             edited = st.data_editor(
-                disp[[
-                    "task_id", "date", "employee_name", "customer",
-                    "task_name", "status", "duration_minutes", "cost", "delete"
-                ]],
+                disp[
+                    [
+                        "task_id",
+                        "date",
+                        "employee_name",
+                        "customer",
+                        "task_name",
+                        "status",
+                        "duration_minutes",
+                        "cost",
+                        "delete",
+                    ]
+                ],
                 column_config={
                     "task_id": st.column_config.TextColumn("ID", disabled=True),
                     "date": st.column_config.DateColumn("Date", disabled=True),
                     "customer": st.column_config.TextColumn("Customer"),
-                    "duration_minutes": st.column_config.NumberColumn("Mins", format="%.1f"),
+                    "duration_minutes": st.column_config.NumberColumn(
+                        "Mins", format="%.1f"
+                    ),
                     "cost": st.column_config.NumberColumn("Cost", format="$%.2f"),
-                    "delete": st.column_config.CheckboxColumn("Delete?", default=False),
+                    "delete": st.column_config.CheckboxColumn(
+                        "Delete?", default=False
+                    ),
                 },
                 hide_index=True,
                 use_container_width=True,
-                key="task_log_editor"
+                key="task_log_editor",
             )
 
             if st.button("Delete Selected Tasks", type="primary"):
@@ -359,11 +471,16 @@ elif page == "2. Employee Tasks":
                 if to_delete:
                     if st.session_state.active_task_id in to_delete:
                         st.error("Cannot delete active task!")
-                        to_delete = [t for t in to_delete if t != st.session_state.active_task_id]
+                        to_delete = [
+                            t
+                            for t in to_delete
+                            if t != st.session_state.active_task_id
+                        ]
                     if to_delete:
                         delete_tasks_from_github(to_delete)
                 else:
                     st.info("No tasks selected.")
+
 
 # -------------------------------
 # PAGE 3 – ADMIN
