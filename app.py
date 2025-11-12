@@ -411,9 +411,9 @@ elif page == "2. Employee Tasks":
                 lambda x: "Completed" if pd.notna(x) else "Active"
             )
 
-            # use the parsed datetime column; show just date in editor
-            disp["date_for_editor"] = disp["date"]
-            disp["date"] = disp["date"].dt.date
+            # ensure datetime before using .dt
+            disp["date_for_editor"] = pd.to_datetime(disp["date"], errors="coerce")
+            disp["date"] = disp["date_for_editor"].dt.date
             disp["delete"] = False
 
             if "task_log_df" not in st.session_state:
@@ -428,15 +428,15 @@ elif page == "2. Employee Tasks":
             edited = st.data_editor(
                 disp[
                     [
-                    "task_id",
-                    "date_for_editor",
-                    "employee_name",
-                    "customer",
-                    "task_name",
-                    "status",
-                    "duration_minutes",
-                    "cost",
-                    "delete",
+                        "task_id",
+                        "date_for_editor",
+                        "employee_name",
+                        "customer",
+                        "task_name",
+                        "status",
+                        "duration_minutes",
+                        "cost",
+                        "delete",
                     ]
                 ].rename(columns={"date_for_editor": "date"}),
                 column_config={
@@ -447,9 +447,7 @@ elif page == "2. Employee Tasks":
                         "Mins", format="%.1f"
                     ),
                     "cost": st.column_config.NumberColumn("Cost", format="$%.2f"),
-                    "delete": st.column_config.CheckboxColumn(
-                        "Delete?", default=False
-                    ),
+                    "delete": st.column_config.CheckboxColumn("Delete?", default=False),
                 },
                 hide_index=True,
                 use_container_width=True,
@@ -457,7 +455,9 @@ elif page == "2. Employee Tasks":
             )
 
             st.session_state.task_log_df = edited.copy()
-            st.session_state.task_log_df["date_for_editor"] = tasks["date"]
+            st.session_state.task_log_df["date_for_editor"] = pd.to_datetime(
+                tasks["date"], errors="coerce"
+            )
 
             if st.button("Delete Selected Tasks", type="primary"):
                 to_delete = edited[edited["delete"] == True]["task_id"].tolist()
@@ -465,9 +465,7 @@ elif page == "2. Employee Tasks":
                     if st.session_state.active_task_id in to_delete:
                         st.error("Cannot delete active task!")
                         to_delete = [
-                            t
-                            for t in to_delete
-                            if t != st.session_state.active_task_id
+                            t for t in to_delete if t != st.session_state.active_task_id
                         ]
                     if to_delete:
                         delete_tasks_from_github(to_delete)
@@ -532,7 +530,7 @@ elif page == "3. Admin":
                 if st.button("Test Employees CSV"):
                     r = requests.get(
                         f"https://api.github.com/repos/{cfg['repo']}/contents/{cfg['emp_file']}?ref={cfg['branch']}",
-                        headers={"Authorization": f"token {cfg['token']}"},
+                        headers={"Authorization": f"token {cfg['token']}",},
                     )
                     st.write(
                         "Exists"
@@ -556,7 +554,7 @@ elif page == "3. Admin":
                 if st.button("Test Tasklist CSV"):
                     r = requests.get(
                         f"https://api.github.com/repos/{cfg['repo']}/contents/{cfg['tasklist_file']}?ref={cfg['branch']}",
-                        headers={"Authorization": f"token {cfg['token']}"}
+                        headers={"Authorization": f"token {cfg['token']}",}
                     )
                     st.write(
                         "Exists"
