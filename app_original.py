@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 from pathlib import Path
@@ -16,7 +15,6 @@ import plotly.express as px
 st.set_page_config(page_title="Task Tracker", page_icon="Timer", layout="wide")
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
-
 TASKS_FILE = DATA_DIR / "tasks.csv"
 EMPLOYEES_FILE = DATA_DIR / "employees.csv"
 TASKLIST_FILE = DATA_DIR / "Tasklist.csv"
@@ -82,7 +80,6 @@ def _github_safe_put(df: pd.DataFrame, file_path: str, msg: str, columns: list) 
         token, repo, branch = cfg["token"], cfg["repo"], cfg["branch"]
         headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
         url = f"https://api.github.com/repos/{repo}/contents/{file_path}?ref={branch}"
-
         r = requests.get(url, headers=headers)
         payload = {
             "message": msg,
@@ -98,13 +95,13 @@ def _github_safe_put(df: pd.DataFrame, file_path: str, msg: str, columns: list) 
         return False
 
 # -------------------------------
-# CACHED DATA
+# CACHED DATA (Short TTL for fast updates)
 # -------------------------------
-@st.cache_data(ttl=30, show_spinner="Loading from GitHub...")
+@st.cache_data(ttl=5, show_spinner="Loading from GitHub...")
 def get_employees():
     return _load_from_github(_github_cfg()["emp_file"], EMPLOYEE_COLUMNS)
 
-@st.cache_data(ttl=30, show_spinner="Loading task list...")
+@st.cache_data(ttl=5, show_spinner="Loading task list...")
 def get_tasklist():
     df = _load_from_github(_github_cfg()["tasklist_file"], TASKLIST_COLUMNS)
     if df.empty:
@@ -117,7 +114,7 @@ def get_tasklist():
         write_tasklist_to_github(df)
     return df
 
-@st.cache_data(ttl=30, show_spinner="Loading tasks...")
+@st.cache_data(ttl=5, show_spinner="Loading tasks...")
 def get_tasks():
     df = _load_from_github(_github_cfg()["task_file"], TASK_COLUMNS)
     df["duration_minutes"] = pd.to_numeric(df["duration_minutes"], errors="coerce").fillna(0)
@@ -135,11 +132,12 @@ def write_task_to_github(task: dict):
     df = get_tasks()
     if task["task_id"] in df["task_id"].values:
         st.error("Task ID exists!")
-        return
+        return False
     df = pd.concat([df, pd.DataFrame([task])], ignore_index=True)
-    if _github_safe_put(df, _github_cfg()["task_file"], f"Add {task['task_id']}", TASK_COLUMNS):
+    success = _github_safe_put(df, _github_cfg()["task_file"], f"Add {task['task_id']}", TASK_COLUMNS)
+    if success:
         clear_cache()
-        st.rerun()
+    return success
 
 def delete_tasks_from_github(task_ids: list):
     df = get_tasks()
@@ -179,11 +177,12 @@ page = st.sidebar.radio("Go to", ["1. Task List", "2. Employee Tasks", "3. Admin
 if page == "1. Task List":
     st.title("Task Library")
     tasklist = get_tasklist().copy()
-
     with st.form("add_task_type", clear_on_submit=True):
         c1, c2 = st.columns(2)
-        with c1: task_name = st.text_input("Task Name")
-        with c2: category = st.text_input("Category")
+        with c1:
+            task_name = st.text_input("Task Name")
+        with c2:
+            category = st.text_input("Category")
         tid = st.text_input("Task ID (optional)").strip()
         if st.form_submit_button("Save"):
             if not task_name.strip():
@@ -191,15 +190,18 @@ if page == "1. Task List":
             else:
                 if not tid:
                     tid = f"TT_{str(uuid.uuid4())[:8]}"
-                new_row = {"task_type_id": tid, "task_name": task_name.strip(), "category": category.strip() or "General"}
+                new_row = {
+                    "task_type_id": tid,
+                    "task_name": task_name.strip(),
+                    "category": category.strip() or "General"
+                }
                 tasklist = tasklist[tasklist["task_type_id"] != tid]
                 tasklist = pd.concat([tasklist, pd.DataFrame([new_row])], ignore_index=True)
                 write_tasklist_to_github(tasklist)
-
     st.dataframe(tasklist[["task_type_id", "task_name", "category"]], use_container_width=True)
 
 # -------------------------------
-# PAGE 2 – EMPLOYEE TASKS (FIXED DELETE)
+# PAGE 2 – EMPLOYEE TASKS
 # -------------------------------
 elif page == "2. Employee Tasks":
     st.title("Employee Tasks")
@@ -233,31 +235,63 @@ elif page == "2. Employee Tasks":
                     "task_description": "", "start_time": now.isoformat(),
                     "end_time": None, "duration_minutes": None, "cost": None,
                 }
-                write_task_to_github(new)
-                st.session_state.active_task_id = tid
-                st.success("Started!")
-                st.rerun()
+                if write_task_to_github(new):
+                    st.session_state.active_task_id = tid
+                    st.success("Task Started!")
+                    st.rerun()
 
+        # ACTIVE TASK WITH LIVE TIMER
         if st.session_state.active_task_id:
-            active = tasks[tasks["task_id"] == st.session_state.active_task_id].iloc[0]
-            start = datetime.fromisoformat(active["start_time"]).astimezone(TIMEZONE)
-            elapsed = datetime.now(TIMEZONE) - start
-            st.write(f"**{active['employee_name']}** – {active['task_name']} | Elapsed: {str(elapsed).split('.')[0]}")
-            if st.button("Finish Task"):
-                end = datetime.now(TIMEZONE)
-                mins = (end - start).total_seconds() / 60
-                rate = float(emps[emps["employee_id"] == active["employee_id"]].iloc[0]["hourly_rate"])
-                cost = round((mins / 60) * rate, 2)
-                df = get_tasks()
-                df.loc[df["task_id"] == st.session_state.active_task_id, ["end_time", "duration_minutes", "cost"]] = [end.isoformat(), mins, cost]
-                _github_safe_put(df, _github_cfg()["task_file"], "Finish task", TASK_COLUMNS)
-                st.session_state.active_task_id = None
-                st.success("Finished!")
-                clear_cache()
-                st.rerun()
+            tasks = get_tasks()
+            active_row = tasks[tasks["task_id"] == st.session_state.active_task_id]
+            if not active_row.empty:
+                active = active_row.iloc[0]
+                start = datetime.fromisoformat(active["start_time"]).astimezone(TIMEZONE)
+                elapsed = datetime.now(TIMEZONE) - start
+                hours, remainder = divmod(int(elapsed.total_seconds()), 3600)
+                minutes, seconds = divmod(remainder, 60)
 
+                st.markdown(
+                    f"""
+                    <div style="background-color:#e3f2fd;padding:20px;border-radius:12px;text-align:center;border:2px solid #1976d2;">
+                        <h3>Active Task</h3>
+                        <p><b>{active['employee_name']}</b> – {active['task_name']}</p>
+                        <p>Customer: <b>{active['customer'] or 'N/A'}</b></p>
+                        <h2 style="color:#1976d2;font-family:monospace;">{hours:02d}:{minutes:02d}:{seconds:02d}</h2>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    if st.button("**FINISH TASK**", type="primary", use_container_width=True, key="finish_btn"):
+                        end = datetime.now(TIMEZONE)
+                        mins = (end - start).total_seconds() / 60
+                        rate = float(emps[emps["employee_id"] == active["employee_id"]].iloc[0]["hourly_rate"])
+                        cost = round((mins / 60) * rate, 2)
+
+                        df = get_tasks()
+                        df.loc[df["task_id"] == st.session_state.active_task_id, 
+                               ["end_time", "duration_minutes", "cost"]] = [end.isoformat(), mins, cost]
+
+                        if _github_safe_put(df, _github_cfg()["task_file"], "Finish task", TASK_COLUMNS):
+                            st.session_state.active_task_id = None
+                            clear_cache()
+                            st.success("Task Finished!")
+                            st.rerun()
+                with col2:
+                    if st.button("Cancel Active Task", type="secondary", use_container_width=True):
+                        st.session_state.active_task_id = None
+                        st.rerun()
+            else:
+                st.warning("Active task not found. Clearing...")
+                if st.button("Clear Active Task"):
+                    st.session_state.active_task_id = None
+                    st.rerun()
+
+        # TASK LOG
         st.subheader("Task Log")
-
         if tasks.empty:
             st.info("No tasks yet.")
         else:
@@ -266,15 +300,12 @@ elif page == "2. Employee Tasks":
             disp["date"] = disp["date"].dt.date
             disp["delete"] = False
 
-            # STORE IN SESSION STATE
             if "task_log_df" not in st.session_state:
                 st.session_state.task_log_df = disp
 
-            # UPDATE FROM CACHE IF NEEDED
             if st.session_state.task_log_df.shape[0] != tasks.shape[0]:
                 st.session_state.task_log_df = disp
 
-            # EDITOR
             edited = st.data_editor(
                 st.session_state.task_log_df[["task_id", "date", "employee_name", "customer", "task_name", "status", "duration_minutes", "cost", "delete"]],
                 column_config={
@@ -290,14 +321,11 @@ elif page == "2. Employee Tasks":
                 key="task_log_editor"
             )
 
-            # UPDATE SESSION STATE
             st.session_state.task_log_df = edited
 
-            # DELETE BUTTON
             if st.button("Delete Selected Tasks", type="primary"):
                 to_delete = edited[edited["delete"] == True]["task_id"].tolist()
                 if to_delete:
-                    # Prevent deleting active task
                     if st.session_state.active_task_id in to_delete:
                         st.error("Cannot delete active task!")
                         to_delete = [t for t in to_delete if t != st.session_state.active_task_id]
@@ -307,7 +335,7 @@ elif page == "2. Employee Tasks":
                     st.info("No tasks selected.")
 
 # -------------------------------
-# PAGE 3 – ADMIN (ALL FILTERS)
+# PAGE 3 – ADMIN
 # -------------------------------
 elif page == "3. Admin":
     st.title("Admin")
@@ -328,14 +356,14 @@ elif page == "3. Admin":
                     else:
                         st.error("Invalid")
         else:
-            if st.button("Logout"): st.session_state.auth = False; st.rerun()
+            if st.button("Logout"): 
+                st.session_state.auth = False
+                st.rerun()
             st.success("Admin Mode")
 
-            # GITHUB SYNC
             st.subheader("GitHub Sync")
             cfg = _github_cfg()
             c1, c2, c3 = st.columns(3)
-
             with c1:
                 if st.button("Test Tasks CSV"):
                     r = requests.get(f"https://api.github.com/repos/{cfg['repo']}/contents/{cfg['task_file']}?ref={cfg['branch']}", headers={"Authorization": f"token {cfg['token']}"})
@@ -346,7 +374,6 @@ elif page == "3. Admin":
                         st.success("Synced!")
                         clear_cache()
                         st.rerun()
-
             with c2:
                 if st.button("Test Employees CSV"):
                     r = requests.get(f"https://api.github.com/repos/{cfg['repo']}/contents/{cfg['emp_file']}?ref={cfg['branch']}", headers={"Authorization": f"token {cfg['token']}"})
@@ -357,7 +384,6 @@ elif page == "3. Admin":
                         st.success("Synced!")
                         clear_cache()
                         st.rerun()
-
             with c3:
                 if st.button("Test Tasklist CSV"):
                     r = requests.get(f"https://api.github.com/repos/{cfg['repo']}/contents/{cfg['tasklist_file']}?ref={cfg['branch']}", headers={"Authorization": f"token {cfg['token']}"})
@@ -369,17 +395,14 @@ elif page == "3. Admin":
                         clear_cache()
                         st.rerun()
 
-            # REPORTS WITH 4 FILTERS
             st.markdown("---")
             st.header("Reports")
             tasks = get_tasks()
             emps = get_employees()
             tasklist = get_tasklist()
-
             if tasks.empty:
                 st.info("No tasks in GitHub.")
             else:
-                # FILTERS
                 col1, col2 = st.columns(2)
                 with col1:
                     start_date = st.date_input("Start Date", value=tasks["date"].min().date())
@@ -387,11 +410,9 @@ elif page == "3. Admin":
                 with col2:
                     selected_employee = st.selectbox("Employee", ["All"] + sorted(emps["name"].dropna().unique().tolist()))
                     selected_customer = st.selectbox("Customer", ["All"] + sorted(tasks["customer"].dropna().unique().tolist()))
-
                 task_options = ["All"] + sorted(tasklist["task_name"].dropna().unique().tolist())
                 selected_task = st.selectbox("Task", task_options)
 
-                # APPLY FILTERS
                 df = tasks.copy()
                 df = df[(df["date"].dt.date >= start_date) & (df["date"].dt.date <= end_date)]
                 if selected_employee != "All":
@@ -404,17 +425,14 @@ elif page == "3. Admin":
                 if df.empty:
                     st.info("No data for selected filters.")
                 else:
-                    # TODAY METRICS
                     today = datetime.now(TIMEZONE).date()
                     today_df = df[pd.to_datetime(df["date"]).dt.date == today]
                     c1, c2, c3 = st.columns(3)
                     c1.metric("Hours", f"{today_df['duration_minutes'].sum()/60:.1f}")
                     c2.metric("Cost", f"${today_df['cost'].sum():,.2f}")
                     c3.metric("Tasks", len(today_df))
-
                     st.markdown("---")
 
-                    # TASK CHARTS
                     if selected_task == "All":
                         task_sum = df.groupby("task_name").agg(
                             hours=("duration_minutes", lambda x: x.sum()/60),
@@ -428,7 +446,6 @@ elif page == "3. Admin":
                             fig = px.pie(task_sum, values="cost", names="task_name", title="Cost by Task")
                             st.plotly_chart(fig, use_container_width=True)
 
-                    # CUSTOMER CHARTS
                     if selected_customer == "All" and df["customer"].notna().any():
                         cust_sum = df.groupby("customer").agg(
                             hours=("duration_minutes", lambda x: x.sum()/60),
@@ -442,5 +459,4 @@ elif page == "3. Admin":
                             fig = px.pie(cust_sum, values="cost", names="customer", title="Revenue by Customer")
                             st.plotly_chart(fig, use_container_width=True)
 
-                    # DOWNLOAD
                     st.download_button("Download Filtered Tasks", df.to_csv(index=False), "filtered_tasks.csv", "text/csv")
