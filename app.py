@@ -75,7 +75,7 @@ def _load_from_github(file_path: str, columns: list) -> pd.DataFrame:
 # -------------------------------
 # SAFE PUSH
 # -------------------------------
-def _github_safe_put(df: pd.DataFrame, file_path: str, key_col: str, msg: str, columns: list) -> bool:
+def _github_safe_put(df: pd.DataFrame, file_path: str, msg: str, columns: list) -> bool:
     try:
         cfg = _github_cfg()
         token, repo, branch = cfg["token"], cfg["repo"], cfg["branch"]
@@ -92,7 +92,8 @@ def _github_safe_put(df: pd.DataFrame, file_path: str, key_col: str, msg: str, c
             payload["sha"] = r.json()["sha"]
         put = requests.put(url, headers=headers, json=payload)
         return put.status_code in (200, 201)
-    except:
+    except Exception as e:
+        st.error(f"Push failed: {e}")
         return False
 
 # -------------------------------
@@ -127,7 +128,7 @@ def clear_cache():
     st.cache_data.clear()
 
 # -------------------------------
-# WRITE & DELETE FUNCTIONS
+# WRITE & DELETE
 # -------------------------------
 def write_task_to_github(task: dict):
     df = get_tasks()
@@ -135,28 +136,29 @@ def write_task_to_github(task: dict):
         st.error("Task ID exists!")
         return
     df = pd.concat([df, pd.DataFrame([task])], ignore_index=True)
-    if _github_safe_put(df, _github_cfg()["task_file"], "task_id", f"Add {task['task_id']}", TASK_COLUMNS):
+    if _github_safe_put(df, _github_cfg()["task_file"], f"Add {task['task_id']}", TASK_COLUMNS):
         clear_cache()
         st.rerun()
 
-def delete_task_from_github(task_id: str):
+def delete_tasks_from_github(task_ids: list):
     df = get_tasks()
-    if task_id not in df["task_id"].values:
-        st.error("Task not found.")
+    before = len(df)
+    df = df[~df["task_id"].isin(task_ids)]
+    if len(df) == before:
+        st.warning("No tasks deleted.")
         return
-    df = df[df["task_id"] != task_id]
-    if _github_safe_put(df, _github_cfg()["task_file"], "task_id", f"Delete task {task_id}", TASK_COLUMNS):
+    if _github_safe_put(df, _github_cfg()["task_file"], f"Delete {len(task_ids)} tasks", TASK_COLUMNS):
         clear_cache()
-        st.success(f"Deleted task {task_id}")
+        st.success(f"Deleted {len(task_ids)} task(s)!")
         st.rerun()
 
 def write_employees_to_github(df: pd.DataFrame):
-    if _github_safe_put(df, _github_cfg()["emp_file"], "employee_id", "Update employees", EMPLOYEE_COLUMNS):
+    if _github_safe_put(df, _github_cfg()["emp_file"], "Update employees", EMPLOYEE_COLUMNS):
         clear_cache()
         st.rerun()
 
 def write_tasklist_to_github(df: pd.DataFrame):
-    if _github_safe_put(df, _github_cfg()["tasklist_file"], "task_type_id", "Update tasklist", TASKLIST_COLUMNS):
+    if _github_safe_put(df, _github_cfg()["tasklist_file"], "Update tasklist", TASKLIST_COLUMNS):
         clear_cache()
         st.rerun()
 
@@ -196,7 +198,7 @@ if page == "1. Task List":
     st.dataframe(tasklist[["task_type_id", "task_name", "category"]], use_container_width=True)
 
 # -------------------------------
-# PAGE 2 – EMPLOYEE TASKS (WITH DELETE)
+# PAGE 2 – EMPLOYEE TASKS (FIXED DELETE)
 # -------------------------------
 elif page == "2. Employee Tasks":
     st.title("Employee Tasks")
@@ -247,7 +249,7 @@ elif page == "2. Employee Tasks":
                 cost = round((mins / 60) * rate, 2)
                 df = get_tasks()
                 df.loc[df["task_id"] == st.session_state.active_task_id, ["end_time", "duration_minutes", "cost"]] = [end.isoformat(), mins, cost]
-                _github_safe_put(df, _github_cfg()["task_file"], "task_id", "Finish task", TASK_COLUMNS)
+                _github_safe_put(df, _github_cfg()["task_file"], "Finish task", TASK_COLUMNS)
                 st.session_state.active_task_id = None
                 st.success("Finished!")
                 clear_cache()
@@ -261,11 +263,19 @@ elif page == "2. Employee Tasks":
             disp = tasks.copy()
             disp["status"] = disp["end_time"].apply(lambda x: "Completed" if pd.notna(x) else "Active")
             disp["date"] = disp["date"].dt.date
-            disp["delete"] = False  # Checkbox column
+            disp["delete"] = False
 
-            # EDITABLE TABLE WITH DELETE CHECKBOX
+            # STORE IN SESSION STATE
+            if "task_log_df" not in st.session_state:
+                st.session_state.task_log_df = disp
+
+            # UPDATE FROM CACHE IF NEEDED
+            if st.session_state.task_log_df.shape[0] != tasks.shape[0]:
+                st.session_state.task_log_df = disp
+
+            # EDITOR
             edited = st.data_editor(
-                disp[["task_id", "date", "employee_name", "customer", "task_name", "status", "duration_minutes", "cost", "delete"]],
+                st.session_state.task_log_df[["task_id", "date", "employee_name", "customer", "task_name", "status", "duration_minutes", "cost", "delete"]],
                 column_config={
                     "task_id": st.column_config.TextColumn("ID", disabled=True),
                     "date": st.column_config.DateColumn("Date", disabled=True),
@@ -279,19 +289,24 @@ elif page == "2. Employee Tasks":
                 key="task_log_editor"
             )
 
+            # UPDATE SESSION STATE
+            st.session_state.task_log_df = edited
+
             # DELETE BUTTON
             if st.button("Delete Selected Tasks", type="primary"):
                 to_delete = edited[edited["delete"] == True]["task_id"].tolist()
                 if to_delete:
-                    for tid in to_delete:
-                        if tid == st.session_state.active_task_id:
-                            st.session_state.active_task_id = None
-                        delete_task_from_github(tid)
+                    # Prevent deleting active task
+                    if st.session_state.active_task_id in to_delete:
+                        st.error("Cannot delete active task!")
+                        to_delete = [t for t in to_delete if t != st.session_state.active_task_id]
+                    if to_delete:
+                        delete_tasks_from_github(to_delete)
                 else:
-                    st.info("No tasks selected for deletion.")
+                    st.info("No tasks selected.")
 
 # -------------------------------
-# PAGE 3 – ADMIN (WITH ALL FILTERS)
+# PAGE 3 – ADMIN (ALL FILTERS)
 # -------------------------------
 elif page == "3. Admin":
     st.title("Admin")
@@ -326,7 +341,7 @@ elif page == "3. Admin":
                     st.write("Exists" if r.status_code == 200 else "Not found" if r.status_code == 404 else "Error")
                 if st.button("Sync Tasks CSV", type="primary"):
                     df = get_tasks()
-                    if _github_safe_put(df, cfg["task_file"], "task_id", "Manual sync tasks", TASK_COLUMNS):
+                    if _github_safe_put(df, cfg["task_file"], "Manual sync tasks", TASK_COLUMNS):
                         st.success("Synced!")
                         clear_cache()
                         st.rerun()
@@ -337,7 +352,7 @@ elif page == "3. Admin":
                     st.write("Exists" if r.status_code == 200 else "Not found" if r.status_code == 404 else "Error")
                 if st.button("Sync Employees CSV", type="primary"):
                     df = get_employees()
-                    if _github_safe_put(df, cfg["emp_file"], "employee_id", "Manual sync employees", EMPLOYEE_COLUMNS):
+                    if _github_safe_put(df, cfg["emp_file"], "Manual sync employees", EMPLOYEE_COLUMNS):
                         st.success("Synced!")
                         clear_cache()
                         st.rerun()
@@ -348,7 +363,7 @@ elif page == "3. Admin":
                     st.write("Exists" if r.status_code == 200 else "Not found" if r.status_code == 404 else "Error")
                 if st.button("Sync Tasklist CSV", type="primary"):
                     df = get_tasklist()
-                    if _github_safe_put(df, cfg["tasklist_file"], "task_type_id", "Manual sync tasklist", TASKLIST_COLUMNS):
+                    if _github_safe_put(df, cfg["tasklist_file"], "Manual sync tasklist", TASKLIST_COLUMNS):
                         st.success("Synced!")
                         clear_cache()
                         st.rerun()
