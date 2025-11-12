@@ -47,7 +47,7 @@ def _github_cfg():
     }
 
 # -------------------------------
-# LOAD FROM GITHUB (FORCE FRESH)
+# LOAD FROM GITHUB
 # -------------------------------
 def _load_from_github(file_path: str, columns: list) -> pd.DataFrame:
     try:
@@ -73,14 +73,14 @@ def _load_from_github(file_path: str, columns: list) -> pd.DataFrame:
         return pd.DataFrame(columns=columns)
 
 # -------------------------------
-# SAFE PUSH TO GITHUB
+# SAFE PUSH
 # -------------------------------
 def _github_safe_put(df: pd.DataFrame, file_path: str, key_col: str, msg: str, columns: list) -> bool:
     try:
         cfg = _github_cfg()
         token, repo, branch = cfg["token"], cfg["repo"], cfg["branch"]
         headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
-        url = f"https://api.github.com/repos/{repo}/contents/{file_path}?ref={branch}"
+        url = f"https://api.com/repos/{repo}/contents/{file_path}?ref={branch}"
 
         r = requests.get(url, headers=headers)
         payload = {
@@ -96,7 +96,7 @@ def _github_safe_put(df: pd.DataFrame, file_path: str, key_col: str, msg: str, c
         return False
 
 # -------------------------------
-# CACHED DATA – FROM GITHUB ONLY
+# CACHED DATA
 # -------------------------------
 @st.cache_data(ttl=30, show_spinner="Loading from GitHub...")
 def get_employees():
@@ -263,7 +263,7 @@ elif page == "2. Employee Tasks":
             )
 
 # -------------------------------
-# PAGE 3 – ADMIN (WITH SYNC + REPORTS)
+# PAGE 3 – ADMIN (WITH FILTERS + SYNC)
 # -------------------------------
 elif page == "3. Admin":
     st.title("Admin")
@@ -287,7 +287,7 @@ elif page == "3. Admin":
             if st.button("Logout"): st.session_state.auth = False; st.rerun()
             st.success("Admin Mode")
 
-            # GITHUB SYNC BUTTONS
+            # GITHUB SYNC
             st.subheader("GitHub Sync")
             cfg = _github_cfg()
             c1, c2, c3 = st.columns(3)
@@ -325,52 +325,73 @@ elif page == "3. Admin":
                         clear_cache()
                         st.rerun()
 
-            # REPORTS
+            # REPORTS WITH FILTERS
             st.markdown("---")
             st.header("Reports")
             tasks = get_tasks()
+            emps = get_employees()
+
             if tasks.empty:
                 st.info("No tasks in GitHub.")
             else:
-                col1, col2 = st.columns(2)
+                # FILTERS
+                col1, col2, col3 = st.columns(3)
                 with col1:
-                    start_date = st.date_input("Start", value=tasks["date"].min().date())
+                    start_date = st.date_input("Start Date", value=tasks["date"].min().date())
                 with col2:
-                    end_date = st.date_input("End", value=tasks["date"].max().date())
-                df = tasks[(tasks["date"].dt.date >= start_date) & (tasks["date"].dt.date <= end_date)]
+                    end_date = st.date_input("End Date", value=tasks["date"].max().date())
+                with col3:
+                    selected_employee = st.selectbox("Employee", ["All"] + sorted(emps["name"].unique()))
+                customer_list = ["All"] + sorted(tasks["customer"].dropna().unique())
+                selected_customer = st.selectbox("Customer", customer_list)
 
-                today = datetime.now(TIMEZONE).date()
-                today_df = df[pd.to_datetime(df["date"]).dt.date == today]
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Hours", f"{today_df['duration_minutes'].sum()/60:.1f}")
-                c2.metric("Cost", f"${today_df['cost'].sum():,.2f}")
-                c3.metric("Tasks", len(today_df))
+                # APPLY FILTERS
+                df = tasks.copy()
+                df = df[(df["date"].dt.date >= start_date) & (df["date"].dt.date <= end_date)]
+                if selected_employee != "All":
+                    df = df[df["employee_name"] == selected_employee]
+                if selected_customer != "All":
+                    df = df[df["customer"] == selected_customer]
 
-                st.markdown("---")
+                if df.empty:
+                    st.info("No data for selected filters.")
+                else:
+                    # TODAY METRICS
+                    today = datetime.now(TIMEZONE).date()
+                    today_df = df[pd.to_datetime(df["date"]).dt.date == today]
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Hours", f"{today_df['duration_minutes'].sum()/60:.1f}")
+                    c2.metric("Cost", f"${today_df['cost'].sum():,.2f}")
+                    c3.metric("Tasks", len(today_df))
 
-                task_sum = df.groupby("task_name").agg(
-                    hours=("duration_minutes", lambda x: x.sum()/60),
-                    cost=("cost", "sum")
-                ).reset_index()
-                col1, col2 = st.columns(2)
-                with col1:
-                    fig = px.bar(task_sum, x="task_name", y="hours", title="Hours by Task")
-                    st.plotly_chart(fig, use_container_width=True)
-                with col2:
-                    fig = px.pie(task_sum, values="cost", names="task_name", title="Cost by Task")
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.markdown("---")
 
-                cust_sum = df[df["customer"].notna()].groupby("customer").agg(
-                    hours=("duration_minutes", lambda x: x.sum()/60),
-                    cost=("cost", "sum")
-                ).reset_index()
-                if not cust_sum.empty:
+                    # TASK CHARTS
+                    task_sum = df.groupby("task_name").agg(
+                        hours=("duration_minutes", lambda x: x.sum()/60),
+                        cost=("cost", "sum")
+                    ).reset_index()
                     col1, col2 = st.columns(2)
                     with col1:
-                        fig = px.bar(cust_sum, x="customer", y="hours", title="Hours by Customer")
+                        fig = px.bar(task_sum, x="task_name", y="hours", title="Hours by Task")
                         st.plotly_chart(fig, use_container_width=True)
                     with col2:
-                        fig = px.pie(cust_sum, values="cost", names="customer", title="Revenue by Customer")
+                        fig = px.pie(task_sum, values="cost", names="task_name", title="Cost by Task")
                         st.plotly_chart(fig, use_container_width=True)
 
-                st.download_button("Download All Tasks", df.to_csv(index=False), "tasks.csv", "text/csv")
+                    # CUSTOMER CHARTS (if applicable)
+                    if selected_customer == "All" and df["customer"].notna().any():
+                        cust_sum = df.groupby("customer").agg(
+                            hours=("duration_minutes", lambda x: x.sum()/60),
+                            cost=("cost", "sum")
+                        ).reset_index()
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            fig = px.bar(cust_sum, x="customer", y="hours", title="Hours by Customer")
+                            st.plotly_chart(fig, use_container_width=True)
+                        with col2:
+                            fig = px.pie(cust_sum, values="cost", names="customer", title="Revenue by Customer")
+                            st.plotly_chart(fig, use_container_width=True)
+
+                    # DOWNLOAD
+                    st.download_button("Download Filtered Tasks", df.to_csv(index=False), "filtered_tasks.csv", "text/csv")
