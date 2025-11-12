@@ -1,12 +1,14 @@
 import streamlit as st
 import pandas as pd
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, date
 import pytz
 import base64
 import requests
 from io import StringIO
 import uuid
+import plotly.express as px
+import plotly.graph_objects as go
 
 # -------------------------------
 # CONFIGURATION
@@ -80,7 +82,7 @@ def _load_from_github(file_path: str, columns: list) -> pd.DataFrame:
         return pd.DataFrame(columns=columns)
 
 # -------------------------------
-# GITHUB: SAFE PUSH (MERGE + UPDATE) - FIXED
+# GITHUB: SAFE PUSH (MERGE + UPDATE)
 # -------------------------------
 def _github_safe_put(local_df: pd.DataFrame, file_path: str, key_col: str, msg: str, columns: list) -> tuple[bool, str]:
     try:
@@ -107,7 +109,6 @@ def _github_safe_put(local_df: pd.DataFrame, file_path: str, key_col: str, msg: 
         github_df = pd.read_csv(StringIO(github_content))
         sha = r.json()["sha"]
 
-        # Deduplicate + align columns
         initial_len = len(github_df)
         github_df = github_df.drop_duplicates(subset=[key_col], keep='last')
         if len(github_df) < initial_len:
@@ -145,7 +146,7 @@ def _github_safe_put(local_df: pd.DataFrame, file_path: str, key_col: str, msg: 
         return False, f"Exception: {e}"
 
 # -------------------------------
-# WRITE & DELETE FUNCTIONS (SAFE)
+# WRITE & DELETE FUNCTIONS
 # -------------------------------
 def write_task_to_github(task: dict) -> bool:
     df = get_tasks().copy()
@@ -200,7 +201,7 @@ def write_task_to_storage(task: dict):
         st.rerun()
 
 # -------------------------------
-# CACHED DATA – FROM GITHUB
+# CACHED DATA
 # -------------------------------
 @st.cache_data(ttl=60)
 def get_employees():
@@ -317,7 +318,6 @@ elif page == "2. Employee Tasks":
                     st.success(f"Started at {now.strftime('%H:%M:%S')}")
                     st.rerun()
 
-        # ACTIVE TASK DISPLAY
         if st.session_state.active_task_id:
             active_row = tasks[tasks["task_id"] == st.session_state.active_task_id]
             if active_row.empty:
@@ -346,7 +346,6 @@ elif page == "2. Employee Tasks":
                     clear_cache()
                     st.rerun()
 
-        # TASK LOG - NOW WITH CUSTOMER
         st.subheader("Task Log")
         if tasks.empty:
             st.info("No tasks yet.")
@@ -439,7 +438,7 @@ elif page == "3. Admin":
                 st.rerun()
             st.success("Admin Mode")
 
-            # GITHUB CONNECTION TEST + SYNC
+            # GITHUB SYNC
             st.subheader("GitHub Connection Test & Safe Sync")
             c1, c2, c3 = st.columns(3)
             cfg = _github_cfg()
@@ -504,7 +503,6 @@ elif page == "3. Admin":
                     else:
                         st.error(msg)
 
-            # ADMIN SECTIONS
             section = st.radio("Section", ["Employees", "Reports"], key="admin_sec")
 
             if section == "Employees":
@@ -562,7 +560,7 @@ elif page == "3. Admin":
                         st.rerun()
 
             # -------------------------------
-            # REPORTS - FULLY UPGRADED
+            # REPORTS - WITH CHARTS + DATE FILTER
             # -------------------------------
             else:
                 st.header("Reports")
@@ -571,133 +569,133 @@ elif page == "3. Admin":
                     st.info("No tasks yet.")
                 else:
                     df = tasks.copy()
-                    df["date"] = pd.to_datetime(df["date"]).dt.date
+                    df["date"] = pd.to_datetime(df["date"])
                     df["duration_minutes"] = pd.to_numeric(df["duration_minutes"], errors="coerce").fillna(0)
                     df["cost"] = pd.to_numeric(df["cost"], errors="coerce").fillna(0)
 
-                    # TODAY'S SUMMARY
-                    today = datetime.now(TIMEZONE).date()
-                    today_tasks = df[pd.to_datetime(df["date"]).dt.date == today]
-                    today_mins = today_tasks["duration_minutes"].sum()
-                    today_cost = today_tasks["cost"].sum()
+                    # DATE FILTER
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        start_date = st.date_input("Start Date", value=df["date"].min().date())
+                    with col2:
+                        end_date = st.date_input("End Date", value=df["date"].max().date())
 
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Today's Hours", f"{today_mins/60:.1f}")
-                    col2.metric("Today's Cost", f"${today_cost:,.2f}")
-                    col3.metric("Tasks Today", len(today_tasks))
-
-                    st.markdown("---")
-
-                    # PER-TASK SUMMARY
-                    st.subheader("Time & Cost by Task")
-                    task_summary = (
-                        df.groupby(["task_name", "task_category"])
-                        .agg(
-                            total_minutes=("duration_minutes", "sum"),
-                            total_cost=("cost", "sum"),
-                            task_count=("task_id", "count")
-                        )
-                        .reset_index()
-                        .sort_values("total_minutes", ascending=False)
-                    )
-                    task_summary["total_hours"] = task_summary["total_minutes"] / 60
-                    task_summary["total_cost"] = task_summary["total_cost"].round(2)
-
-                    task_disp = task_summary.copy()
-                    task_disp["total_hours"] = task_disp["total_hours"].round(2)
-                    task_disp["total_cost"] = task_disp["total_cost"].map("${:,.2f}".format)
-                    task_disp["total_minutes"] = task_disp["total_minutes"].astype(int)
-
-                    st.dataframe(
-                        task_disp[["task_name", "task_category", "task_count", "total_minutes", "total_hours", "total_cost"]],
-                        column_config={
-                            "task_name": "Task",
-                            "task_category": "Category",
-                            "task_count": "Count",
-                            "total_minutes": "Minutes",
-                            "total_hours": "Hours",
-                            "total_cost": "Cost"
-                        },
-                        use_container_width=True,
-                        hide_index=True
-                    )
-
-                    csv_task = task_summary.to_csv(index=False)
-                    st.download_button(
-                        "Download Task Summary CSV",
-                        csv_task,
-                        "task_summary.csv",
-                        "text/csv",
-                        key="download_task"
-                    )
-
-                    st.markdown("---")
-
-                    # PER-CUSTOMER SUMMARY
-                    st.subheader("Time & Cost by Customer")
-                    cust_summary = (
-                        df[df["customer"].notna() & (df["customer"].str.strip() != "")]
-                        .groupby("customer")
-                        .agg(
-                            total_minutes=("duration_minutes", "sum"),
-                            total_cost=("cost", "sum"),
-                            task_count=("task_id", "count")
-                        )
-                        .reset_index()
-                        .sort_values("total_minutes", ascending=False)
-                    )
-                    if cust_summary.empty:
-                        st.info("No customers recorded yet.")
+                    if start_date > end_date:
+                        st.error("Start date must be before end date.")
                     else:
-                        cust_summary["total_hours"] = cust_summary["total_minutes"] / 60
-                        cust_summary["total_cost"] = cust_summary["total_cost"].round(2)
+                        mask = (df["date"].dt.date >= start_date) & (df["date"].dt.date <= end_date)
+                        df = df[mask].copy()
 
-                        cust_disp = cust_summary.copy()
-                        cust_disp["total_hours"] = cust_disp["total_hours"].round(2)
-                        cust_disp["total_cost"] = cust_disp["total_cost"].map("${:,.2f}".format)
-                        cust_disp["total_minutes"] = cust_disp["total_minutes"].astype(int)
+                        if df.empty:
+                            st.info("No data in selected date range.")
+                        else:
+                            # TODAY'S SUMMARY
+                            today = datetime.now(TIMEZONE).date()
+                            today_tasks = df[pd.to_datetime(df["date"]).dt.date == today]
+                            today_mins = today_tasks["duration_minutes"].sum()
+                            today_cost = today_tasks["cost"].sum()
 
-                        st.dataframe(
-                            cust_disp[["customer", "task_count", "total_minutes", "total_hours", "total_cost"]],
-                            column_config={
-                                "customer": "Customer",
-                                "task_count": "Tasks",
-                                "total_minutes": "Minutes",
-                                "total_hours": "Hours",
-                                "total_cost": "Cost"
-                            },
-                            use_container_width=True,
-                            hide_index=True
-                        )
+                            col1, col2, col3 = st.columns(3)
+                            col1.metric("Hours", f"{today_mins/60:.1f}")
+                            col2.metric("Cost", f"${today_cost:,.2f}")
+                            col3.metric("Tasks", len(today_tasks))
 
-                        csv_cust = cust_summary.to_csv(index=False)
-                        st.download_button(
-                            "Download Customer Summary CSV",
-                            csv_cust,
-                            "customer_summary.csv",
-                            "text/csv",
-                            key="download_cust"
-                        )
+                            st.markdown("---")
 
-                    st.markdown("---")
+                            # PER-TASK SUMMARY + CHARTS
+                            st.subheader("Time & Cost by Task")
+                            task_summary = (
+                                df.groupby(["task_name", "task_category"])
+                                .agg(
+                                    total_minutes=("duration_minutes", "sum"),
+                                    total_cost=("cost", "sum"),
+                                    task_count=("task_id", "count")
+                                )
+                                .reset_index()
+                                .sort_values("total_minutes", ascending=False)
+                            )
+                            task_summary["total_hours"] = task_summary["total_minutes"] / 60
 
-                    # GRAND TOTALS
-                    st.subheader("Grand Totals")
-                    total_mins = df["duration_minutes"].sum()
-                    total_cost = df["cost"].sum()
-                    total_tasks = len(df)
+                            # Table
+                            task_disp = task_summary.copy()
+                            task_disp["total_hours"] = task_disp["total_hours"].round(2)
+                            task_disp["total_cost"] = task_disp["total_cost"].round(2).map("${:,.2f}".format)
+                            task_disp["total_minutes"] = task_disp["total_minutes"].astype(int)
 
-                    g1, g2, g3 = st.columns(3)
-                    g1.metric("All-Time Hours", f"{total_mins/60:.1f}")
-                    g2.metric("All-Time Cost", f"${total_cost:,.2f}")
-                    g3.metric("Total Tasks", total_tasks)
+                            st.dataframe(
+                                task_disp[["task_name", "task_category", "task_count", "total_minutes", "total_hours", "total_cost"]],
+                                use_container_width=True,
+                                hide_index=True
+                            )
 
-                    if st.button("Export All Tasks (Full Data)", type="primary"):
-                        full_csv = df.to_csv(index=False)
-                        st.download_button(
-                            "Download Full Tasks CSV",
-                            full_csv,
-                            "all_tasks_full.csv",
-                            "text/csv",
-                            key="download_full"
-                )
+                            # Charts
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                fig = px.bar(task_summary, x="task_name", y="total_hours", color="task_category",
+                                           title="Hours by Task", labels={"total_hours": "Hours", "task_name": "Task"})
+                                st.plotly_chart(fig, use_container_width=True)
+                            with col2:
+                                fig = px.pie(task_summary, values="total_cost", names="task_name", title="Cost Distribution")
+                                st.plotly_chart(fig, use_container_width=True)
+
+                            csv_task = task_summary.to_csv(index=False)
+                            st.download_button("Download Task Summary", csv_task, "task_summary.csv", "text/csv")
+
+                            st.markdown("---")
+
+                            # PER-CUSTOMER SUMMARY + CHARTS
+                            st.subheader("Time & Cost by Customer")
+                            cust_summary = (
+                                df[df["customer"].notna() & (df["customer"].str.strip() != "")]
+                                .groupby("customer")
+                                .agg(
+                                    total_minutes=("duration_minutes", "sum"),
+                                    total_cost=("cost", "sum"),
+                                    task_count=("task_id", "count")
+                                )
+                                .reset_index()
+                                .sort_values("total_minutes", ascending=False)
+                            )
+                            if cust_summary.empty:
+                                st.info("No customers in date range.")
+                            else:
+                                cust_summary["total_hours"] = cust_summary["total_minutes"] / 60
+
+                                cust_disp = cust_summary.copy()
+                                cust_disp["total_hours"] = cust_disp["total_hours"].round(2)
+                                cust_disp["total_cost"] = cust_disp["total_cost"].round(2).map("${:,.2f}".format)
+                                cust_disp["total_minutes"] = cust_disp["total_minutes"].astype(int)
+
+                                st.dataframe(
+                                    cust_disp[["customer", "task_count", "total_minutes", "total_hours", "total_cost"]],
+                                    use_container_width=True,
+                                    hide_index=True
+                                )
+
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    fig = px.bar(cust_summary, x="customer", y="total_hours", title="Hours by Customer")
+                                    st.plotly_chart(fig, use_container_width=True)
+                                with col2:
+                                    fig = px.pie(cust_summary, values="total_cost", names="customer", title="Revenue by Customer")
+                                    st.plotly_chart(fig, use_container_width=True)
+
+                                csv_cust = cust_summary.to_csv(index=False)
+                                st.download_button("Download Customer Summary", csv_cust, "customer_summary.csv", "text/csv")
+
+                            st.markdown("---")
+
+                            # GRAND TOTALS
+                            st.subheader("Grand Totals")
+                            total_mins = df["duration_minutes"].sum()
+                            total_cost = df["cost"].sum()
+                            total_tasks = len(df)
+
+                            g1, g2, g3 = st.columns(3)
+                            g1.metric("Total Hours", f"{total_mins/60:.1f}")
+                            g2.metric("Total Cost", f"${total_cost:,.2f}")
+                            g3.metric("Total Tasks", total_tasks)
+
+                            if st.button("Export Full Data", type="primary"):
+                                full_csv = df.to_csv(index=False)
+                                st.download_button("Download All Tasks", full_csv, "all_tasks.csv", "text/csv")
