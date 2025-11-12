@@ -12,13 +12,13 @@ import plotly.express as px
 # -------------------------------
 # CONFIG
 # -------------------------------
-st.set_page_config(page_title="Task Tracker", page_icon="⏱️", layout="wide")
+st.set_page_config(page_title="Task Tracker", page_icon="Timer", layout="wide")
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 TASKS_FILE = DATA_DIR / "tasks.csv"
 EMPLOYEES_FILE = DATA_DIR / "employees.csv"
 TASKLIST_FILE = DATA_DIR / "Tasklist.csv"
-TIMEZONE = pytz.timezone("America/New_York")
+TIMEZONE = pytz.timezone('America/New_York')
 
 # -------------------------------
 # CONSTANTS
@@ -55,7 +55,6 @@ def _github_cfg():
         "tasklist_file": cfg.get("tasklist_file_path", "Data/Tasklist.csv"),
     }
 
-
 # -------------------------------
 # LOAD FROM GITHUB
 # -------------------------------
@@ -63,10 +62,7 @@ def _load_from_github(file_path: str, columns: list) -> pd.DataFrame:
     try:
         cfg = _github_cfg()
         url = f"https://api.github.com/repos/{cfg['repo']}/contents/{file_path}?ref={cfg['branch']}"
-        headers = {
-            "Authorization": f"token {cfg['token']}",
-            "Accept": "application/vnd.github.v3+json",
-        }
+        headers = {"Authorization": f"token {cfg['token']}", "Accept": "application/vnd.github.v3+json"}
         r = requests.get(url, headers=headers, timeout=10)
         if r.status_code == 200:
             content = base64.b64decode(r.json()["content"]).decode("utf-8")
@@ -84,7 +80,6 @@ def _load_from_github(file_path: str, columns: list) -> pd.DataFrame:
     except Exception as e:
         st.error(f"Load failed: {e}")
         return pd.DataFrame(columns=columns)
-
 
 # -------------------------------
 # SAFE PUSH
@@ -112,7 +107,6 @@ def _github_safe_put(df: pd.DataFrame, file_path: str, msg: str, columns: list) 
         st.error(f"Push failed: {e}")
         return False
 
-
 # -------------------------------
 # CACHED DATA
 # -------------------------------
@@ -120,32 +114,18 @@ def _github_safe_put(df: pd.DataFrame, file_path: str, msg: str, columns: list) 
 def get_employees():
     return _load_from_github(_github_cfg()["emp_file"], EMPLOYEE_COLUMNS)
 
-
 @st.cache_data(ttl=5, show_spinner="Loading task list...")
 def get_tasklist():
     df = _load_from_github(_github_cfg()["tasklist_file"], TASKLIST_COLUMNS)
     if df.empty:
         defaults = [
-            {
-                "task_type_id": "TT_SALES_1",
-                "task_name": "Sales – First Contact Reply",
-                "category": "Sales",
-            },
-            {
-                "task_type_id": "TT_SALES_2",
-                "task_name": "Sales – Schedule Site Survey",
-                "category": "Sales",
-            },
-            {
-                "task_type_id": "TT_OPS_1",
-                "task_name": "Construction – Pull Fiber",
-                "category": "Construction",
-            },
+            {"task_type_id":"TT_SALES_1","task_name":"Sales – First Contact Reply","category":"Sales"},
+            {"task_type_id":"TT_SALES_2","task_name":"Sales – Schedule Site Survey","category":"Sales"},
+            {"task_type_id":"TT_OPS_1","task_name":"Construction – Pull Fiber","category":"Construction"},
         ]
         df = pd.DataFrame(defaults)
         write_tasklist_to_github(df)
     return df
-
 
 @st.cache_data(ttl=5, show_spinner="Loading tasks...")
 def get_tasks():
@@ -157,25 +137,17 @@ def get_tasks():
             df[col] = None
     df = df.reindex(columns=TASK_COLUMNS)
 
-    df["duration_minutes"] = pd.to_numeric(
-        df["duration_minutes"], errors="coerce"
-    ).fillna(0)
+    # Numeric fields
+    df["duration_minutes"] = pd.to_numeric(df["duration_minutes"], errors="coerce").fillna(0)
     df["cost"] = pd.to_numeric(df["cost"], errors="coerce").fillna(0)
 
-    # ---- DATE FIX ----
-    # 1) Try to parse existing 'date' as datetime
-    parsed_date = pd.to_datetime(df["date"], errors="coerce")
-
-    # 2) For any rows where date is missing, derive from start_time
+    # Robust date handling: unify 'date' and 'start_time' into a single datetime (UTC)
+    date_series = pd.to_datetime(df["date"], errors="coerce", utc=True)
     if "start_time" in df.columns:
-        missing = parsed_date.isna() & df["start_time"].notna()
-        if missing.any():
-            parsed_from_start = pd.to_datetime(
-                df.loc[missing, "start_time"], errors="coerce"
-            )
-            parsed_date.loc[missing] = parsed_from_start
+        start_ts = pd.to_datetime(df["start_time"], errors="coerce", utc=True)
+        date_series = date_series.fillna(start_ts)
 
-    df["date"] = parsed_date
+    df["date"] = date_series
 
     # Normalize category if missing
     if "task_category" in df.columns:
@@ -185,10 +157,8 @@ def get_tasks():
 
     return df
 
-
 def clear_cache():
     st.cache_data.clear()
-
 
 # -------------------------------
 # WRITE & DELETE
@@ -199,13 +169,10 @@ def write_task_to_github(task: dict):
         st.error("Task ID exists!")
         return False
     df = pd.concat([df, pd.DataFrame([task])], ignore_index=True)
-    success = _github_safe_put(
-        df, _github_cfg()["task_file"], f"Add {task['task_id']}", TASK_COLUMNS
-    )
+    success = _github_safe_put(df, _github_cfg()["task_file"], f"Add {task['task_id']}", TASK_COLUMNS)
     if success:
         clear_cache()
     return success
-
 
 def delete_tasks_from_github(task_ids: list):
     df = get_tasks()
@@ -214,29 +181,20 @@ def delete_tasks_from_github(task_ids: list):
     if len(df) == before:
         st.warning("No tasks deleted.")
         return
-    if _github_safe_put(
-        df, _github_cfg()["task_file"], f"Delete {len(task_ids)} tasks", TASK_COLUMNS
-    ):
+    if _github_safe_put(df, _github_cfg()["task_file"], f"Delete {len(task_ids)} tasks", TASK_COLUMNS):
         clear_cache()
         st.success(f"Deleted {len(task_ids)} task(s)!")
         st.rerun()
 
-
 def write_employees_to_github(df: pd.DataFrame):
-    if _github_safe_put(
-        df, _github_cfg()["emp_file"], "Update employees", EMPLOYEE_COLUMNS
-    ):
+    if _github_safe_put(df, _github_cfg()["emp_file"], "Update employees", EMPLOYEE_COLUMNS):
         clear_cache()
         st.rerun()
-
 
 def write_tasklist_to_github(df: pd.DataFrame):
-    if _github_safe_put(
-        df, _github_cfg()["tasklist_file"], "Update tasklist", TASKLIST_COLUMNS
-    ):
+    if _github_safe_put(df, _github_cfg()["tasklist_file"], "Update tasklist", TASKLIST_COLUMNS):
         clear_cache()
         st.rerun()
-
 
 # -------------------------------
 # SIDEBAR
@@ -246,9 +204,7 @@ if st.sidebar.button("Force Refresh All Data", type="secondary"):
     clear_cache()
     st.rerun()
 
-page = st.sidebar.radio(
-    "Go to", ["1. Task List", "2. Employee Tasks", "3. Admin"], index=1
-)
+page = st.sidebar.radio("Go to", ["1. Task List", "2. Employee Tasks", "3. Admin"], index=1)
 
 # -------------------------------
 # PAGE 1 – TASK LIST
@@ -272,16 +228,12 @@ if page == "1. Task List":
                 new_row = {
                     "task_type_id": tid,
                     "task_name": task_name.strip(),
-                    "category": category.strip() or "General",
+                    "category": category.strip() or "General"
                 }
                 tasklist = tasklist[tasklist["task_type_id"] != tid]
-                tasklist = pd.concat(
-                    [tasklist, pd.DataFrame([new_row])], ignore_index=True
-                )
+                tasklist = pd.concat([tasklist, pd.DataFrame([new_row])], ignore_index=True)
                 write_tasklist_to_github(tasklist)
-    st.dataframe(
-        tasklist[["task_type_id", "task_name", "category"]], use_container_width=True
-    )
+    st.dataframe(tasklist[["task_type_id", "task_name", "category"]], use_container_width=True)
 
 # -------------------------------
 # PAGE 2 – EMPLOYEE TASKS
@@ -305,27 +257,18 @@ elif page == "2. Employee Tasks":
                 task_name = st.selectbox("Task", tasklist["task_name"])
             with c2:
                 cust = st.text_input("Customer")
-            if st.form_submit_button(
-                "Start Task", disabled=st.session_state.active_task_id is not None
-            ):
+            if st.form_submit_button("Start Task", disabled=st.session_state.active_task_id is not None):
                 emp = emps[emps["name"] == emp_name].iloc[0]
                 typ = tasklist[tasklist["task_name"] == task_name].iloc[0]
                 now = datetime.now(TIMEZONE)
                 tid = f"T{str(uuid.uuid4())[:8]}"
                 new = {
-                    "task_id": tid,
-                    "date": now.date().isoformat(),
-                    "employee_id": emp["employee_id"],
-                    "employee_name": emp["name"],
-                    "task_type_id": typ["task_type_id"],
-                    "task_name": typ["task_name"],
-                    "task_category": typ["category"],
-                    "customer": cust,
-                    "task_description": "",
-                    "start_time": now.isoformat(),
-                    "end_time": None,
-                    "duration_minutes": None,
-                    "cost": None,
+                    "task_id": tid, "date": now.date().isoformat(),
+                    "employee_id": emp["employee_id"], "employee_name": emp["name"],
+                    "task_type_id": typ["task_type_id"], "task_name": typ["task_name"],
+                    "task_category": typ["category"], "customer": cust,
+                    "task_description": "", "start_time": now.isoformat(),
+                    "end_time": None, "duration_minutes": None, "cost": None,
                 }
                 if write_task_to_github(new):
                     st.session_state.active_task_id = tid
@@ -338,9 +281,7 @@ elif page == "2. Employee Tasks":
             active_row = tasks[tasks["task_id"] == st.session_state.active_task_id]
             if not active_row.empty:
                 active = active_row.iloc[0]
-                start = datetime.fromisoformat(active["start_time"]).astimezone(
-                    TIMEZONE
-                )
+                start = datetime.fromisoformat(active["start_time"]).astimezone(TIMEZONE)
                 elapsed = datetime.now(TIMEZONE) - start
                 hours, remainder = divmod(int(elapsed.total_seconds()), 3600)
                 minutes, seconds = divmod(remainder, 60)
@@ -354,45 +295,28 @@ elif page == "2. Employee Tasks":
                         <h2 style="color:#1976d2;font-family:monospace;">{hours:02d}:{minutes:02d}:{seconds:02d}</h2>
                     </div>
                     """,
-                    unsafe_allow_html=True,
+                    unsafe_allow_html=True
                 )
 
                 col1, col2 = st.columns([1, 2])
                 with col1:
-                    if st.button(
-                        "**FINISH TASK**",
-                        type="primary",
-                        use_container_width=True,
-                        key="finish_btn",
-                    ):
+                    if st.button("**FINISH TASK**", type="primary", use_container_width=True, key="finish_btn"):
                         end = datetime.now(TIMEZONE)
                         mins = (end - start).total_seconds() / 60
-                        rate = float(
-                            emps[emps["employee_id"] == active["employee_id"]]
-                            .iloc[0]["hourly_rate"]
-                        )
+                        rate = float(emps[emps["employee_id"] == active["employee_id"]].iloc[0]["hourly_rate"])
                         cost = round((mins / 60) * rate, 2)
 
                         df = get_tasks()
-                        df.loc[
-                            df["task_id"] == st.session_state.active_task_id,
-                            ["end_time", "duration_minutes", "cost"],
-                        ] = [end.isoformat(), mins, cost]
+                        df.loc[df["task_id"] == st.session_state.active_task_id, 
+                               ["end_time", "duration_minutes", "cost"]] = [end.isoformat(), mins, cost]
 
-                        if _github_safe_put(
-                            df,
-                            _github_cfg()["task_file"],
-                            "Finish task",
-                            TASK_COLUMNS,
-                        ):
+                        if _github_safe_put(df, _github_cfg()["task_file"], "Finish task", TASK_COLUMNS):
                             st.session_state.active_task_id = None
                             clear_cache()
                             st.success("Task Finished!")
                             st.rerun()
                 with col2:
-                    if st.button(
-                        "Cancel Active Task", type="secondary", use_container_width=True
-                    ):
+                    if st.button("Cancel Active Task", type="secondary", use_container_width=True):
                         st.session_state.active_task_id = None
                         st.rerun()
             else:
@@ -408,47 +332,26 @@ elif page == "2. Employee Tasks":
             st.info("No tasks yet.")
         else:
             disp = tasks.copy()
-
-            # Status column
-            disp["status"] = disp["end_time"].apply(
-                lambda x: "Completed" if pd.notna(x) else "Active"
-            )
-
-            # Use start_time to derive the Date shown in the log
+            disp["status"] = disp["end_time"].apply(lambda x: "Completed" if pd.notna(x) else "Active")
             disp["date"] = pd.to_datetime(disp["start_time"], errors="coerce").dt.date
-
-            # Delete checkbox column
             disp["delete"] = False
 
             edited = st.data_editor(
-                disp[
-                    [
-                        "task_id",
-                        "date",
-                        "employee_name",
-                        "customer",
-                        "task_name",
-                        "status",
-                        "duration_minutes",
-                        "cost",
-                        "delete",
-                    ]
-                ],
+                disp[[
+                    "task_id", "date", "employee_name", "customer",
+                    "task_name", "status", "duration_minutes", "cost", "delete"
+                ]],
                 column_config={
                     "task_id": st.column_config.TextColumn("ID", disabled=True),
                     "date": st.column_config.DateColumn("Date", disabled=True),
                     "customer": st.column_config.TextColumn("Customer"),
-                    "duration_minutes": st.column_config.NumberColumn(
-                        "Mins", format="%.1f"
-                    ),
+                    "duration_minutes": st.column_config.NumberColumn("Mins", format="%.1f"),
                     "cost": st.column_config.NumberColumn("Cost", format="$%.2f"),
-                    "delete": st.column_config.CheckboxColumn(
-                        "Delete?", default=False
-                    ),
+                    "delete": st.column_config.CheckboxColumn("Delete?", default=False),
                 },
                 hide_index=True,
                 use_container_width=True,
-                key="task_log_editor",
+                key="task_log_editor"
             )
 
             if st.button("Delete Selected Tasks", type="primary"):
@@ -456,18 +359,14 @@ elif page == "2. Employee Tasks":
                 if to_delete:
                     if st.session_state.active_task_id in to_delete:
                         st.error("Cannot delete active task!")
-                        to_delete = [
-                            t
-                            for t in to_delete
-                            if t != st.session_state.active_task_id
-                        ]
+                        to_delete = [t for t in to_delete if t != st.session_state.active_task_id]
                     if to_delete:
                         delete_tasks_from_github(to_delete)
                 else:
                     st.info("No tasks selected.")
 
 # -------------------------------
-# PAGE 3 – ADMIN (ENHANCED REPORTS)
+# PAGE 3 – ADMIN
 # -------------------------------
 elif page == "3. Admin":
     st.title("Admin")
@@ -498,73 +397,34 @@ elif page == "3. Admin":
             c1, c2, c3 = st.columns(3)
             with c1:
                 if st.button("Test Tasks CSV"):
-                    r = requests.get(
-                        f"https://api.github.com/repos/{cfg['repo']}/contents/{cfg['task_file']}?ref={cfg['branch']}",
-                        headers={"Authorization": f"token {cfg['token']}"},
-                    )
-                    st.write(
-                        "Exists"
-                        if r.status_code == 200
-                        else "Not found"
-                        if r.status_code == 404
-                        else "Error"
-                    )
+                    r = requests.get(f"https://api.github.com/repos/{cfg['repo']}/contents/{cfg['task_file']}?ref={cfg['branch']}",
+                                     headers={"Authorization": f"token {cfg['token']}"})
+                    st.write("Exists" if r.status_code == 200 else "Not found" if r.status_code == 404 else "Error")
                 if st.button("Sync Tasks CSV", type="primary"):
                     df = get_tasks()
-                    if _github_safe_put(
-                        df,
-                        cfg["task_file"],
-                        "Manual sync tasks",
-                        TASK_COLUMNS,
-                    ):
+                    if _github_safe_put(df, cfg["task_file"], "Manual sync tasks", TASK_COLUMNS):
                         st.success("Synced!")
                         clear_cache()
                         st.rerun()
             with c2:
                 if st.button("Test Employees CSV"):
-                    r = requests.get(
-                        f"https://api.github.com/repos/{cfg['repo']}/contents/{cfg['emp_file']}?ref={cfg['branch']}",
-                        headers={"Authorization": f"token {cfg['token']}"},
-                    )
-                    st.write(
-                        "Exists"
-                        if r.status_code == 200
-                        else "Not found"
-                        if r.status_code == 404
-                        else "Error"
-                    )
+                    r = requests.get(f"https://api.github.com/repos/{cfg['repo']}/contents/{cfg['emp_file']}?ref={cfg['branch']}",
+                                     headers={"Authorization": f"token {cfg['token']}"})
+                    st.write("Exists" if r.status_code == 200 else "Not found" if r.status_code == 404 else "Error")
                 if st.button("Sync Employees CSV", type="primary"):
                     df = get_employees()
-                    if _github_safe_put(
-                        df,
-                        cfg["emp_file"],
-                        "Manual sync employees",
-                        EMPLOYEE_COLUMNS,
-                    ):
+                    if _github_safe_put(df, cfg["emp_file"], "Manual sync employees", EMPLOYEE_COLUMNS):
                         st.success("Synced!")
                         clear_cache()
                         st.rerun()
             with c3:
                 if st.button("Test Tasklist CSV"):
-                    r = requests.get(
-                        f"https://api.github.com/repos/{cfg['repo']}/contents/{cfg['tasklist_file']}?ref={cfg['branch']}",
-                        headers={"Authorization": f"token {cfg['token']}"},
-                    )
-                    st.write(
-                        "Exists"
-                        if r.status_code == 200
-                        else "Not found"
-                        if r.status_code == 404
-                        else "Error"
-                    )
+                    r = requests.get(f"https://api.github.com/repos/{cfg['repo']}/contents/{cfg['tasklist_file']}?ref={cfg['branch']}",
+                                     headers={"Authorization": f"token {cfg['token']}"})
+                    st.write("Exists" if r.status_code == 200 else "Not found" if r.status_code == 404 else "Error")
                 if st.button("Sync Tasklist CSV", type="primary"):
                     df = get_tasklist()
-                    if _github_safe_put(
-                        df,
-                        cfg["tasklist_file"],
-                        "Manual sync tasklist",
-                        TASKLIST_COLUMNS,
-                    ):
+                    if _github_safe_put(df, cfg["tasklist_file"], "Manual sync tasklist", TASKLIST_COLUMNS):
                         st.success("Synced!")
                         clear_cache()
                         st.rerun()
@@ -577,55 +437,25 @@ elif page == "3. Admin":
             if tasks.empty:
                 st.info("No tasks in GitHub.")
             else:
-                # Ensure tasks['date'] is datetime; if missing, derive from start_time
-                date_series = pd.to_datetime(tasks["date"], errors="coerce")
-
-                if "start_time" in tasks.columns:
-                    missing = date_series.isna() & tasks["start_time"].notna()
-                    if missing.any():
-                        date_series.loc[missing] = pd.to_datetime(
-                            tasks.loc[missing, "start_time"], errors="coerce"
-                        )
-
-                tasks["date"] = date_series
-
-                # Safe defaults for date inputs
-                if tasks["date"].notna().any():
-                    min_date = tasks["date"].min().date()
-                    max_date = tasks["date"].max().date()
-                else:
-                    today = datetime.now(TIMEZONE).date()
-                    min_date = today
-                    max_date = today
-
                 col1, col2 = st.columns(2)
                 with col1:
+                    valid_dates = tasks["date"].dropna()
+                    if not valid_dates.empty:
+                        min_date = valid_dates.min().date()
+                        max_date = valid_dates.max().date()
+                    else:
+                        today = datetime.now(TIMEZONE).date()
+                        min_date = max_date = today
                     start_date = st.date_input("Start Date", value=min_date)
                     end_date = st.date_input("End Date", value=max_date)
                 with col2:
-                    selected_employee = st.selectbox(
-                        "Employee",
-                        ["All"] + sorted(emps["name"].dropna().unique().tolist()),
-                    )
-                    selected_customer = st.selectbox(
-                        "Customer",
-                        ["All"]
-                        + sorted(tasks["customer"].dropna().unique().tolist()),
-                    )
-
-                task_options = (
-                    ["All"]
-                    + sorted(tasklist["task_name"].dropna().unique().tolist())
-                )
+                    selected_employee = st.selectbox("Employee", ["All"] + sorted(emps["name"].dropna().unique().tolist()))
+                    selected_customer = st.selectbox("Customer", ["All"] + sorted(tasks["customer"].dropna().unique().tolist()))
+                task_options = ["All"] + sorted(tasklist["task_name"].dropna().unique().tolist())
                 selected_task = st.selectbox("Task", task_options)
 
                 df = tasks.copy()
-                df["date"] = pd.to_datetime(df["date"], errors="coerce")
-
-                df = df[
-                    (df["date"].dt.date >= start_date)
-                    & (df["date"].dt.date <= end_date)
-                ]
+                df = df[(df["date"].dt.date >= start_date) & (df["date"].dt.date <= end_date)]
                 if selected_employee != "All":
                     df = df[df["employee_name"] == selected_employee]
                 if selected_customer != "All":
@@ -637,182 +467,87 @@ elif page == "3. Admin":
                     st.info("No data for selected filters.")
                 else:
                     today = datetime.now(TIMEZONE).date()
-                    today_df = df[pd.to_datetime(df["date"]).dt.date == today]
+                    today_df = df[df["date"].dt.date == today]
                     c1, c2, c3, c4 = st.columns(4)
-                    c1.metric(
-                        "Hours (Today)",
-                        f"{today_df['duration_minutes'].sum()/60:.1f}",
-                    )
-                    c2.metric(
-                        "Cost (Today)",
-                        f"${today_df['cost'].sum():,.2f}",
-                    )
+                    c1.metric("Hours (Today)", f"{today_df['duration_minutes'].sum()/60:.1f}")
+                    c2.metric("Cost (Today)", f"${today_df['cost'].sum():,.2f}")
                     c3.metric("Tasks (Today)", int(len(today_df)))
-                    avg_mins = df[df["duration_minutes"] > 0][
-                        "duration_minutes"
-                    ].mean()
-                    c4.metric(
-                        "Avg Task Duration (min)",
-                        f"{(avg_mins if pd.notna(avg_mins) else 0):.1f}",
-                    )
+                    avg_mins = df[df["duration_minutes"] > 0]["duration_minutes"].mean()
+                    c4.metric("Avg Task Duration (min)", f"{(avg_mins if pd.notna(avg_mins) else 0):.1f}")
                     st.markdown("---")
 
                     df["hours"] = df["duration_minutes"] / 60.0
-                    df["week_start"] = (
-                        df["date"]
-                        .dt.to_period("W-SUN")
-                        .apply(lambda p: p.start_time.date())
-                    )
+                    df["week_start"] = df["date"].dt.to_period("W-SUN").apply(lambda p: p.start_time.date())
 
-                    emp_sum = (
-                        df.groupby("employee_name", dropna=False)
-                        .agg(
-                            hours=("hours", "sum"),
-                            cost=("cost", "sum"),
-                            tasks=("task_id", "count"),
-                        )
-                        .reset_index()
-                    )
+                    emp_sum = df.groupby("employee_name", dropna=False).agg(
+                        hours=("hours", "sum"),
+                        cost=("cost", "sum"),
+                        tasks=("task_id", "count")
+                    ).reset_index()
                     emp_sum = emp_sum.sort_values("hours", ascending=False)
                     colA, colB = st.columns(2)
                     with colA:
-                        fig = px.bar(
-                            emp_sum,
-                            x="employee_name",
-                            y="hours",
-                            title="Hours by Employee",
-                            labels={
-                                "employee_name": "Employee",
-                                "hours": "Hours",
-                            },
-                        )
+                        fig = px.bar(emp_sum, x="employee_name", y="hours", title="Hours by Employee",
+                                     labels={"employee_name": "Employee", "hours": "Hours"})
                         st.plotly_chart(fig, use_container_width=True)
                     with colB:
-                        fig = px.bar(
-                            emp_sum,
-                            x="employee_name",
-                            y="cost",
-                            title="Cost by Employee",
-                            labels={
-                                "employee_name": "Employee",
-                                "cost": "Cost",
-                            },
-                        )
+                        fig = px.bar(emp_sum, x="employee_name", y="cost", title="Cost by Employee",
+                                     labels={"employee_name": "Employee", "cost": "Cost"})
                         st.plotly_chart(fig, use_container_width=True)
 
-                    weekly = (
-                        df.groupby(["week_start", "employee_name"], dropna=False)
-                        .agg(hours=("hours", "sum"))
-                        .reset_index()
-                    )
+                    weekly = df.groupby(["week_start", "employee_name"], dropna=False).agg(
+                        hours=("hours", "sum")
+                    ).reset_index()
                     if not weekly.empty:
-                        fig = px.bar(
-                            weekly,
-                            x="week_start",
-                            y="hours",
-                            color="employee_name",
-                            title="Weekly Hours by Employee (stacked)",
-                            labels={
-                                "week_start": "Week Start",
-                                "hours": "Hours",
-                            },
-                        )
+                        fig = px.bar(weekly, x="week_start", y="hours", color="employee_name",
+                                     title="Weekly Hours by Employee (stacked)",
+                                     labels={"week_start": "Week Start", "hours": "Hours"})
                         st.plotly_chart(fig, use_container_width=True)
 
-                    cat_sum = (
-                        df.groupby("task_category", dropna=False)
-                        .agg(hours=("hours", "sum"), cost=("cost", "sum"))
-                        .reset_index()
-                    )
+                    cat_sum = df.groupby("task_category", dropna=False).agg(
+                        hours=("hours", "sum"),
+                        cost=("cost", "sum")
+                    ).reset_index()
                     colC, colD = st.columns(2)
                     with colC:
-                        fig = px.bar(
-                            cat_sum,
-                            x="task_category",
-                            y="cost",
-                            title="Cost by Category",
-                            labels={
-                                "task_category": "Category",
-                                "cost": "Cost",
-                            },
-                        )
+                        fig = px.bar(cat_sum, x="task_category", y="cost", title="Cost by Category",
+                                     labels={"task_category": "Category", "cost": "Cost"})
                         st.plotly_chart(fig, use_container_width=True)
                     with colD:
-                        fig = px.pie(
-                            cat_sum,
-                            values="hours",
-                            names="task_category",
-                            title="Hours Share by Category",
-                        )
+                        fig = px.pie(cat_sum, values="hours", names="task_category", title="Hours Share by Category")
                         st.plotly_chart(fig, use_container_width=True)
 
-                    dur = (
-                        df[df["duration_minutes"] > 0]
-                        .groupby("task_name", dropna=False)
-                        .agg(
-                            avg_minutes=("duration_minutes", "mean"),
-                            hours=("hours", "sum"),
-                            tasks=("task_id", "count"),
-                        )
-                        .reset_index()
-                    )
+                    dur = df[df["duration_minutes"] > 0].groupby("task_name", dropna=False).agg(
+                        avg_minutes=("duration_minutes", "mean"),
+                        hours=("hours", "sum"),
+                        tasks=("task_id", "count")
+                    ).reset_index()
                     dur = dur.sort_values("avg_minutes", ascending=False)
-                    fig = px.bar(
-                        dur.head(20),
-                        x="task_name",
-                        y="avg_minutes",
-                        title="Average Duration (min) by Task – Top 20",
-                        labels={
-                            "task_name": "Task",
-                            "avg_minutes": "Avg Minutes",
-                        },
-                    )
+                    fig = px.bar(dur.head(20), x="task_name", y="avg_minutes",
+                                 title="Average Duration (min) by Task – Top 20",
+                                 labels={"task_name": "Task", "avg_minutes": "Avg Minutes"})
                     st.plotly_chart(fig, use_container_width=True)
 
                     if df["customer"].notna().any():
-                        cust = (
-                            df.groupby("customer")
-                            .agg(
-                                hours=("hours", "sum"),
-                                cost=("cost", "sum"),
-                                tasks=("task_id", "count"),
-                            )
-                            .reset_index()
-                            .sort_values("hours", ascending=False)
-                        )
+                        cust = df.groupby("customer").agg(
+                            hours=("hours", "sum"),
+                            cost=("cost", "sum"),
+                            tasks=("task_id", "count")
+                        ).reset_index()
+                        cust = cust.sort_values("hours", ascending=False)
                         colE, colF = st.columns(2)
                         with colE:
-                            fig = px.bar(
-                                cust.head(20),
-                                x="customer",
-                                y="hours",
-                                title="Top Customers by Hours",
-                            )
+                            fig = px.bar(cust.head(20), x="customer", y="hours", title="Top Customers by Hours")
                             st.plotly_chart(fig, use_container_width=True)
                         with colF:
-                            fig = px.bar(
-                                cust.head(20),
-                                x="customer",
-                                y="cost",
-                                title="Top Customers by Cost",
-                            )
+                            fig = px.bar(cust.head(20), x="customer", y="cost", title="Top Customers by Cost")
                             st.plotly_chart(fig, use_container_width=True)
                     else:
-                        cust = pd.DataFrame(
-                            columns=["customer", "hours", "cost", "tasks"]
-                        )
+                        cust = pd.DataFrame(columns=["customer", "hours", "cost", "tasks"])
 
                     st.subheader("Downloadable Summaries")
                     if df["customer"].notna().any():
-                        tabs = st.tabs(
-                            [
-                                "Employees",
-                                "Categories",
-                                "Tasks",
-                                "Weekly",
-                                "Customers",
-                            ]
-                        )
+                        tabs = st.tabs(["Employees", "Categories", "Tasks", "Weekly", "Customers"])
                     else:
                         tabs = st.tabs(["Employees", "Categories", "Tasks", "Weekly"])
 
@@ -824,7 +559,6 @@ elif page == "3. Admin":
                             "employees_summary.csv",
                             "text/csv",
                         )
-
                     with tabs[1]:
                         st.dataframe(cat_sum, use_container_width=True)
                         st.download_button(
@@ -833,7 +567,6 @@ elif page == "3. Admin":
                             "categories_summary.csv",
                             "text/csv",
                         )
-
                     with tabs[2]:
                         st.dataframe(dur, use_container_width=True)
                         st.download_button(
@@ -842,12 +575,9 @@ elif page == "3. Admin":
                             "task_duration_summary.csv",
                             "text/csv",
                         )
-
                     with tabs[3]:
                         st.dataframe(
-                            weekly.sort_values(
-                                ["week_start", "employee_name"]
-                            ).reset_index(drop=True),
+                            weekly.sort_values(["week_start", "employee_name"]).reset_index(drop=True),
                             use_container_width=True,
                         )
                         st.download_button(
@@ -856,7 +586,6 @@ elif page == "3. Admin":
                             "weekly_hours.csv",
                             "text/csv",
                         )
-
                     if df["customer"].notna().any():
                         with tabs[4]:
                             st.dataframe(cust, use_container_width=True)
@@ -864,61 +593,33 @@ elif page == "3. Admin":
                                 "Download Customers Summary",
                                 cust.to_csv(index=False),
                                 "customers_summary.csv",
+                                "text/csv",
                             )
-
-                    st.markdown("---")
 
                     if selected_task == "All":
-                        task_sum = (
-                            df.groupby("task_name")
-                            .agg(hours=("hours", "sum"), cost=("cost", "sum"))
-                            .reset_index()
-                        )
+                        task_sum = df.groupby("task_name").agg(
+                            hours=("hours", "sum"),
+                            cost=("cost", "sum")
+                        ).reset_index()
                         col1, col2 = st.columns(2)
                         with col1:
-                            fig = px.bar(
-                                task_sum,
-                                x="task_name",
-                                y="hours",
-                                title="Hours by Task",
-                            )
+                            fig = px.bar(task_sum, x="task_name", y="hours", title="Hours by Task")
                             st.plotly_chart(fig, use_container_width=True)
                         with col2:
-                            fig = px.pie(
-                                task_sum,
-                                values="cost",
-                                names="task_name",
-                                title="Cost by Task",
-                            )
+                            fig = px.pie(task_sum, values="cost", names="task_name", title="Cost by Task")
                             st.plotly_chart(fig, use_container_width=True)
 
                     if selected_customer == "All" and df["customer"].notna().any():
-                        cust_sum = (
-                            df.groupby("customer")
-                            .agg(hours=("hours", "sum"), cost=("cost", "sum"))
-                            .reset_index()
-                        )
+                        cust_sum = df.groupby("customer").agg(
+                            hours=("duration_minutes", lambda x: x.sum()/60),
+                            cost=("cost", "sum")
+                        ).reset_index()
                         col1, col2 = st.columns(2)
                         with col1:
-                            fig = px.bar(
-                                cust_sum,
-                                x="customer",
-                                y="hours",
-                                title="Hours by Customer",
-                            )
+                            fig = px.bar(cust_sum, x="customer", y="hours", title="Hours by Customer")
                             st.plotly_chart(fig, use_container_width=True)
                         with col2:
-                            fig = px.pie(
-                                cust_sum,
-                                values="cost",
-                                names="customer",
-                                title="Revenue by Customer",
-                            )
+                            fig = px.pie(cust_sum, values="cost", names="customer", title="Revenue by Customer")
                             st.plotly_chart(fig, use_container_width=True)
 
-                    st.download_button(
-                        "Download Filtered Tasks",
-                        df.drop(columns=["hours"]).to_csv(index=False),
-                        "filtered_tasks.csv",
-                        "text/csv",
-                    )
+                    st.download_button("Download Filtered Tasks", df.to_csv(index=False), "filtered_tasks.csv", "text/csv")
