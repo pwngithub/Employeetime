@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 from pathlib import Path
@@ -15,6 +16,9 @@ import plotly.express as px
 st.set_page_config(page_title="Task Tracker", page_icon="Timer", layout="wide")
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
+TASKS_FILE = DATA_DIR / "tasks.csv"
+EMPLOYEES_FILE = DATA_DIR / "employees.csv"
+TASKLIST_FILE = DATA_DIR / "Tasklist.csv"
 TIMEZONE = pytz.timezone('America/New_York')
 
 # -------------------------------
@@ -92,7 +96,7 @@ def _github_safe_put(df: pd.DataFrame, file_path: str, msg: str, columns: list) 
         return False
 
 # -------------------------------
-# CACHED DATA
+# CACHED DATA (Short TTL for fast updates)
 # -------------------------------
 @st.cache_data(ttl=5, show_spinner="Loading from GitHub...")
 def get_employees():
@@ -198,7 +202,7 @@ if page == "1. Task List":
     st.dataframe(tasklist[["task_type_id", "task_name", "category"]], use_container_width=True)
 
 # -------------------------------
-# PAGE 2 – EMPLOYEE TASKS (MULTI-USER + DATE FIXED)
+# PAGE 2 – EMPLOYEE TASKS
 # -------------------------------
 elif page == "2. Employee Tasks":
     st.title("Employee Tasks")
@@ -206,8 +210,8 @@ elif page == "2. Employee Tasks":
     tasklist = get_tasklist()
     tasks = get_tasks()
 
-    if "active_tasks" not in st.session_state:
-        st.session_state.active_tasks = []
+    if "active_task_id" not in st.session_state:
+        st.session_state.active_task_id = None
 
     if emps.empty or tasklist.empty:
         st.warning("Add employees/tasks in Admin")
@@ -219,11 +223,7 @@ elif page == "2. Employee Tasks":
                 task_name = st.selectbox("Task", tasklist["task_name"])
             with c2:
                 cust = st.text_input("Customer")
-
-            emp_tasks = tasks[tasks["employee_name"] == emp_name]
-            has_active = emp_tasks[emp_tasks["end_time"].isna()].any().any() if not emp_tasks.empty else False
-
-            if st.form_submit_button("Start Task", disabled=has_active):
+            if st.form_submit_button("Start Task", disabled=st.session_state.active_task_id is not None):
                 emp = emps[emps["name"] == emp_name].iloc[0]
                 typ = tasklist[tasklist["task_name"] == task_name].iloc[0]
                 now = datetime.now(TIMEZONE)
@@ -237,64 +237,69 @@ elif page == "2. Employee Tasks":
                     "end_time": None, "duration_minutes": None, "cost": None,
                 }
                 if write_task_to_github(new):
-                    if tid not in st.session_state.active_tasks:
-                        st.session_state.active_tasks.append(tid)
-                    st.success(f"Task Started for {emp_name}!")
+                    st.session_state.active_task_id = tid
+                    st.success("Task Started!")
                     st.rerun()
 
-        # ACTIVE TASKS
-        active_df = tasks[tasks["task_id"].isin(st.session_state.active_tasks) & tasks["end_time"].isna()]
-        if not active_df.empty:
-            st.subheader("Active Tasks")
-            for _, row in active_df.iterrows():
-                start = datetime.fromisoformat(row["start_time"]).astimezone(TIMEZONE)
+        # ACTIVE TASK WITH LIVE TIMER
+        if st.session_state.active_task_id:
+            tasks = get_tasks()
+            active_row = tasks[tasks["task_id"] == st.session_state.active_task_id]
+            if not active_row.empty:
+                active = active_row.iloc[0]
+                start = datetime.fromisoformat(active["start_time"]).astimezone(TIMEZONE)
                 elapsed = datetime.now(TIMEZONE) - start
                 hours, remainder = divmod(int(elapsed.total_seconds()), 3600)
                 minutes, seconds = divmod(remainder, 60)
 
                 st.markdown(
                     f"""
-                    <div style="background-color:#e8f5e9;padding:16px;border-radius:10px;margin-bottom:10px;border-left:5px solid #4caf50;">
-                        <p><b>{row['employee_name']}</b> → {row['task_name']}</p>
-                        <p>Customer: <b>{row['customer'] or 'N/A'}</b> | Elapsed: <b>{hours:02d}:{minutes:02d}:{seconds:02d}</b></p>
+                    <div style="background-color:#e3f2fd;padding:20px;border-radius:12px;text-align:center;border:2px solid #1976d2;">
+                        <h3>Active Task</h3>
+                        <p><b>{active['employee_name']}</b> – {active['task_name']}</p>
+                        <p>Customer: <b>{active['customer'] or 'N/A'}</b></p>
+                        <h2 style="color:#1976d2;font-family:monospace;">{hours:02d}:{minutes:02d}:{seconds:02d}</h2>
                     </div>
                     """,
                     unsafe_allow_html=True
                 )
 
-                col1, col2 = st.columns([1, 3])
+                col1, col2 = st.columns([1, 2])
                 with col1:
-                    if st.button(f"Finish##{row['task_id']}", key=f"finish_{row['task_id']}", type="primary"):
+                    if st.button("**FINISH TASK**", type="primary", use_container_width=True, key="finish_btn"):
                         end = datetime.now(TIMEZONE)
                         mins = (end - start).total_seconds() / 60
-                        rate = float(emps[emps["employee_id"] == row["employee_id"]].iloc[0]["hourly_rate"])
+                        rate = float(emps[emps["employee_id"] == active["employee_id"]].iloc[0]["hourly_rate"])
                         cost = round((mins / 60) * rate, 2)
 
                         df = get_tasks()
-                        df.loc[df["task_id"] == row["task_id"], 
+                        df.loc[df["task_id"] == st.session_state.active_task_id, 
                                ["end_time", "duration_minutes", "cost"]] = [end.isoformat(), mins, cost]
 
-                        if _github_safe_put(df, _github_cfg()["task_file"], f"Finish {row['task_id']}", TASK_COLUMNS):
-                            st.session_state.active_tasks = [t for t in st.session_state.active_tasks if t != row["task_id"]]
+                        if _github_safe_put(df, _github_cfg()["task_file"], "Finish task", TASK_COLUMNS):
+                            st.session_state.active_task_id = None
                             clear_cache()
-                            st.success(f"Task finished for {row['employee_name']}!")
+                            st.success("Task Finished!")
                             st.rerun()
                 with col2:
-                    if st.button(f"Cancel##{row['task_id']}", key=f"cancel_{row['task_id']}", type="secondary"):
-                        st.session_state.active_tasks = [t for t in st.session_state.active_tasks if t != row["task_id"]]
+                    if st.button("Cancel Active Task", type="secondary", use_container_width=True):
+                        st.session_state.active_task_id = None
                         st.rerun()
-        else:
-            st.info("No active tasks.")
+            else:
+                st.warning("Active task not found. Clearing...")
+                if st.button("Clear Active Task"):
+                    st.session_state.active_task_id = None
+                    st.rerun()
 
-        # === TASK LOG (DATE FIXED) ===
+        # TASK LOG
         st.subheader("Task Log")
         if tasks.empty:
             st.info("No tasks yet.")
         else:
             disp = tasks.copy()
             disp["status"] = disp["end_time"].apply(lambda x: "Completed" if pd.notna(x) else "Active")
-            disp["date_for_editor"] = disp["date"]  # Keep full Timestamp
-            disp["date"] = disp["date"].dt.date     # For internal use only
+            disp["date"] = disp["date"].dt.date
+            disp["delete"] = False
 
             if "task_log_df" not in st.session_state:
                 st.session_state.task_log_df = disp
@@ -303,10 +308,7 @@ elif page == "2. Employee Tasks":
                 st.session_state.task_log_df = disp
 
             edited = st.data_editor(
-                st.session_state.task_log_df[[
-                    "task_id", "date_for_editor", "employee_name", "customer",
-                    "task_name", "status", "duration_minutes", "cost", "delete"
-                ]].rename(columns={"date_for_editor": "date"}),
+                st.session_state.task_log_df[["task_id", "date", "employee_name", "customer", "task_name", "status", "duration_minutes", "cost", "delete"]],
                 column_config={
                     "task_id": st.column_config.TextColumn("ID", disabled=True),
                     "date": st.column_config.DateColumn("Date", disabled=True),
@@ -325,13 +327,16 @@ elif page == "2. Employee Tasks":
             if st.button("Delete Selected Tasks", type="primary"):
                 to_delete = edited[edited["delete"] == True]["task_id"].tolist()
                 if to_delete:
-                    st.session_state.active_tasks = [t for t in st.session_state.active_tasks if t not in to_delete]
-                    delete_tasks_from_github(to_delete)
+                    if st.session_state.active_task_id in to_delete:
+                        st.error("Cannot delete active task!")
+                        to_delete = [t for t in to_delete if t != st.session_state.active_task_id]
+                    if to_delete:
+                        delete_tasks_from_github(to_delete)
                 else:
                     st.info("No tasks selected.")
 
 # -------------------------------
-# PAGE 3 – ADMIN (unchanged)
+# PAGE 3 – ADMIN
 # -------------------------------
 elif page == "3. Admin":
     st.title("Admin")
