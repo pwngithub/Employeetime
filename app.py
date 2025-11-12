@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 from pathlib import Path
@@ -96,7 +95,7 @@ def _github_safe_put(df: pd.DataFrame, file_path: str, msg: str, columns: list) 
         return False
 
 # -------------------------------
-# CACHED DATA (Short TTL for fast updates)
+# CACHED DATA
 # -------------------------------
 @st.cache_data(ttl=5, show_spinner="Loading from GitHub...")
 def get_employees():
@@ -291,53 +290,54 @@ elif page == "2. Employee Tasks":
                     st.session_state.active_task_id = None
                     st.rerun()
 
-      # === TASK LOG (DATE FIXED) ===
-st.subheader("Task Log")
-if tasks.empty:
-    st.info("No tasks yet.")
-else:
-    disp = tasks.copy()
-    disp["status"] = disp["end_time"].apply(lambda x: "Completed" if pd.notna(x) else "Active")
-    disp["date_for_editor"] = disp["date"]  # Keep full Timestamp
-    disp["date"] = disp["date"].dt.date     # Optional: for internal logic
-    disp["delete"] = False
-
-    if "task_log_df" not in st.session_state:
-        st.session_state.task_log_df = disp
-
-    if st.session_state.task_log_df.shape[0] != tasks.shape[0]:
-        st.session_state.task_log_df = disp
-
-    edited = st.data_editor(
-        st.session_state.task_log_df[[
-            "task_id", "date_for_editor", "employee_name", "customer",
-            "task_name", "status", "duration_minutes", "cost", "delete"
-        ]].rename(columns={"date_for_editor": "date"}),  # Show correct name
-        column_config={
-            "task_id": st.column_config.TextColumn("ID", disabled=True),
-            "date": st.column_config.DateColumn("Date", disabled=True),
-            "customer": st.column_config.TextColumn("Customer"),
-            "duration_minutes": st.column_config.NumberColumn("Mins", format="%.1f"),
-            "cost": st.column_config.NumberColumn("Cost", format="$%.2f"),
-            "delete": st.column_config.CheckboxColumn("Delete?", default=False),
-        },
-        hide_index=True,
-        use_container_width=True,
-        key="task_log_editor"
-    )
-
-    st.session_state.task_log_df = edited
-
-    if st.button("Delete Selected Tasks", type="primary"):
-        to_delete = edited[edited["delete"] == True]["task_id"].tolist()
-        if to_delete:
-            if st.session_state.active_task_id in to_delete:
-                st.error("Cannot delete active task!")
-                to_delete = [t for t in to_delete if t != st.session_state.active_task_id]
-            if to_delete:
-                delete_tasks_from_github(to_delete)
+        # === TASK LOG (DATE FIXED) ===
+        st.subheader("Task Log")
+        if tasks.empty:
+            st.info("No tasks yet.")
         else:
-            st.info("No tasks selected.")
+            disp = tasks.copy()
+            disp["status"] = disp["end_time"].apply(lambda x: "Completed" if pd.notna(x) else "Active")
+            disp["date_for_editor"] = disp["date"]  # Keep full Timestamp
+            disp["date"] = disp["date"].dt.date     # Optional: for internal use
+            disp["delete"] = False
+
+            if "task_log_df" not in st.session_state:
+                st.session_state.task_log_df = disp
+
+            if st.session_state.task_log_df.shape[0] != tasks.shape[0]:
+                st.session_state.task_log_df = disp
+
+            edited = st.data_editor(
+                st.session_state.task_log_df[[
+                    "task_id", "date_for_editor", "employee_name", "customer",
+                    "task_name", "status", "duration_minutes", "cost", "delete"
+                ]].rename(columns={"date_for_editor": "date"}),
+                column_config={
+                    "task_id": st.column_config.TextColumn("ID", disabled=True),
+                    "date": st.column_config.DateColumn("Date", disabled=True),
+                    "customer": st.column_config.TextColumn("Customer"),
+                    "duration_minutes": st.column_config.NumberColumn("Mins", format="%.1f"),
+                    "cost": st.column_config.NumberColumn("Cost", format="$%.2f"),
+                    "delete": st.column_config.CheckboxColumn("Delete?", default=False),
+                },
+                hide_index=True,
+                use_container_width=True,
+                key="task_log_editor"
+            )
+
+            st.session_state.task_log_df = edited
+
+            if st.button("Delete Selected Tasks", type="primary"):
+                to_delete = edited[edited["delete"] == True]["task_id"].tolist()
+                if to_delete:
+                    if st.session_state.active_task_id in to_delete:
+                        st.error("Cannot delete active task!")
+                        to_delete = [t for t in to_delete if t != st.session_state.active_task_id]
+                    if to_delete:
+                        delete_tasks_from_github(to_delete)
+                else:
+                    st.info("No tasks selected.")
+
 # -------------------------------
 # PAGE 3 – ADMIN
 # -------------------------------
