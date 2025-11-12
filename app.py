@@ -278,7 +278,7 @@ elif page == "3. Admin":
                 u = st.text_input("User")
                 p = st.text_input("Password", type="password")
                 if st.form_submit_button("Login"):
-                    if u in admin_users and p == admin_users[p]:
+                    if u in admin_users and p == admin_users[u]:
                         st.session_state.auth = True
                         st.rerun()
                     else:
@@ -299,7 +299,9 @@ elif page == "3. Admin":
                 if st.button("Sync Tasks CSV", type="primary"):
                     df = get_tasks()
                     if _github_safe_put(df, cfg["task_file"], "task_id", "Manual sync tasks", TASK_COLUMNS):
-                        st
+                        st.success("Synced!")
+                        clear_cache()
+                        st.rerun()
 
             with c2:
                 if st.button("Test Employees CSV"):
@@ -328,7 +330,7 @@ elif page == "3. Admin":
             st.header("Reports")
             tasks = get_tasks()
             emps = get_employees()
-            task_names = get_tasklist()["task_name"].tolist()
+            tasklist = get_tasklist()
 
             if tasks.empty:
                 st.info("No tasks in GitHub.")
@@ -339,9 +341,12 @@ elif page == "3. Admin":
                     start_date = st.date_input("Start Date", value=tasks["date"].min().date())
                     end_date = st.date_input("End Date", value=tasks["date"].max().date())
                 with col2:
-                    selected_employee = st.selectbox("Employee", ["All"] + sorted(emps["name"].unique()))
-                    selected_customer = st.selectbox("Customer", ["All"] + sorted(tasks["customer"].dropna().unique()))
-                selected_task = st.selectbox("Task", ["All"] + sorted(task_names))
+                    selected_employee = st.selectbox("Employee", ["All"] + sorted(emps["name"].dropna().unique().tolist()))
+                    selected_customer = st.selectbox("Customer", ["All"] + sorted(tasks["customer"].dropna().unique().tolist()))
+
+                # Task filter from Tasklist (not tasks.csv)
+                task_options = ["All"] + sorted(tasklist["task_name"].dropna().unique().tolist())
+                selected_task = st.selectbox("Task", task_options)
 
                 # APPLY FILTERS
                 df = tasks.copy()
@@ -366,7 +371,7 @@ elif page == "3. Admin":
 
                     st.markdown("---")
 
-                    # TASK CHARTS (if not filtered by task)
+                    # TASK CHARTS (only if "All" selected)
                     if selected_task == "All":
                         task_sum = df.groupby("task_name").agg(
                             hours=("duration_minutes", lambda x: x.sum()/60),
@@ -380,7 +385,7 @@ elif page == "3. Admin":
                             fig = px.pie(task_sum, values="cost", names="task_name", title="Cost by Task")
                             st.plotly_chart(fig, use_container_width=True)
 
-                    # CUSTOMER CHARTS (if not filtered by customer)
+                    # CUSTOMER CHARTS (only if "All" selected)
                     if selected_customer == "All" and df["customer"].notna().any():
                         cust_sum = df.groupby("customer").agg(
                             hours=("duration_minutes", lambda x: x.sum()/60),
