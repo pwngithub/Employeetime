@@ -401,7 +401,7 @@ elif page == "2. Employee Tasks":
                     st.session_state.active_task_id = None
                     st.rerun()
 
-        # === TASK LOG (SIMPLE, RELIABLE DATE) ===
+        # === TASK LOG (Date derived from start_time) ===
         st.subheader("Task Log")
         tasks = get_tasks()
         if tasks.empty:
@@ -414,9 +414,8 @@ elif page == "2. Employee Tasks":
                 lambda x: "Completed" if pd.notna(x) else "Active"
             )
 
-            # Ensure 'date' is datetime, then downcast to plain date
-            disp["date"] = pd.to_datetime(disp["date"], errors="coerce")
-            disp["date"] = disp["date"].dt.date
+            # Use start_time to derive the Date shown in the log
+            disp["date"] = pd.to_datetime(disp["start_time"], errors="coerce").dt.date
 
             # Delete checkbox column
             disp["delete"] = False
@@ -764,7 +763,7 @@ elif page == "3. Admin":
                                 tasks=("task_id", "count"),
                             )
                             .reset_index()
-                            .sort_values("hours", descending=False)
+                            .sort_values("hours", ascending=False)
                         )
                         colE, colF = st.columns(2)
                         with colE:
@@ -852,7 +851,6 @@ elif page == "3. Admin":
                                 "Download Customers Summary",
                                 cust.to_csv(index=False),
                                 "customers_summary.csv",
-                                "text/csv",
                             )
 
                     st.markdown("---")
