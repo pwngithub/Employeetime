@@ -95,7 +95,7 @@ def _github_safe_put(df: pd.DataFrame, file_path: str, msg: str, columns: list) 
         return False
 
 # -------------------------------
-# CACHED DATA (Reduced TTL)
+# CACHED DATA (Short TTL for fast updates)
 # -------------------------------
 @st.cache_data(ttl=5, show_spinner="Loading from GitHub...")
 def get_employees():
@@ -178,9 +178,11 @@ if page == "1. Task List":
     st.title("Task Library")
     tasklist = get_tasklist().copy()
     with st.form("add_task_type", clear_on_submit=True):
- her        c1, c2 = st.columns(2)
-        with c1: task_name = st.text_input("Task Name")
-        with c2: category = st.text_input("Category")
+        c1, c2 = st.columns(2)
+        with c1:
+            task_name = st.text_input("Task Name")
+        with c2:
+            category = st.text_input("Category")
         tid = st.text_input("Task ID (optional)").strip()
         if st.form_submit_button("Save"):
             if not task_name.strip():
@@ -188,14 +190,18 @@ if page == "1. Task List":
             else:
                 if not tid:
                     tid = f"TT_{str(uuid.uuid4())[:8]}"
-                new_row = {"task_type_id": tid, "task_name": task_name.strip(), "category": category.strip() or "General"}
+                new_row = {
+                    "task_type_id": tid,
+                    "task_name": task_name.strip(),
+                    "category": category.strip() or "General"
+                }
                 tasklist = tasklist[tasklist["task_type_id"] != tid]
                 tasklist = pd.concat([tasklist, pd.DataFrame([new_row])], ignore_index=True)
                 write_tasklist_to_github(tasklist)
     st.dataframe(tasklist[["task_type_id", "task_name", "category"]], use_container_width=True)
 
 # -------------------------------
-# PAGE 2 – EMPLOYEE TASKS (FIXED START/STOP)
+# PAGE 2 – EMPLOYEE TASKS
 # -------------------------------
 elif page == "2. Employee Tasks":
     st.title("Employee Tasks")
@@ -234,9 +240,9 @@ elif page == "2. Employee Tasks":
                     st.success("Task Started!")
                     st.rerun()
 
-        # ACTIVE TASK DISPLAY WITH LIVE TIMER
+        # ACTIVE TASK WITH LIVE TIMER
         if st.session_state.active_task_id:
-            tasks = get_tasks()  # Refresh
+            tasks = get_tasks()
             active_row = tasks[tasks["task_id"] == st.session_state.active_task_id]
             if not active_row.empty:
                 active = active_row.iloc[0]
@@ -279,7 +285,7 @@ elif page == "2. Employee Tasks":
                         st.session_state.active_task_id = None
                         st.rerun()
             else:
-                st.warning("Active task not found in records. Clearing...")
+                st.warning("Active task not found. Clearing...")
                 if st.button("Clear Active Task"):
                     st.session_state.active_task_id = None
                     st.rerun()
