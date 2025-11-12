@@ -127,7 +127,7 @@ def clear_cache():
     st.cache_data.clear()
 
 # -------------------------------
-# WRITE FUNCTIONS
+# WRITE & DELETE FUNCTIONS
 # -------------------------------
 def write_task_to_github(task: dict):
     df = get_tasks()
@@ -137,6 +137,17 @@ def write_task_to_github(task: dict):
     df = pd.concat([df, pd.DataFrame([task])], ignore_index=True)
     if _github_safe_put(df, _github_cfg()["task_file"], "task_id", f"Add {task['task_id']}", TASK_COLUMNS):
         clear_cache()
+        st.rerun()
+
+def delete_task_from_github(task_id: str):
+    df = get_tasks()
+    if task_id not in df["task_id"].values:
+        st.error("Task not found.")
+        return
+    df = df[df["task_id"] != task_id]
+    if _github_safe_put(df, _github_cfg()["task_file"], "task_id", f"Delete task {task_id}", TASK_COLUMNS):
+        clear_cache()
+        st.success(f"Deleted task {task_id}")
         st.rerun()
 
 def write_employees_to_github(df: pd.DataFrame):
@@ -185,7 +196,7 @@ if page == "1. Task List":
     st.dataframe(tasklist[["task_type_id", "task_name", "category"]], use_container_width=True)
 
 # -------------------------------
-# PAGE 2 – EMPLOYEE TASKS
+# PAGE 2 – EMPLOYEE TASKS (WITH DELETE)
 # -------------------------------
 elif page == "2. Employee Tasks":
     st.title("Employee Tasks")
@@ -243,24 +254,41 @@ elif page == "2. Employee Tasks":
                 st.rerun()
 
         st.subheader("Task Log")
+
         if tasks.empty:
             st.info("No tasks yet.")
         else:
             disp = tasks.copy()
             disp["status"] = disp["end_time"].apply(lambda x: "Completed" if pd.notna(x) else "Active")
             disp["date"] = disp["date"].dt.date
-            st.data_editor(
-                disp[["task_id", "date", "employee_name", "customer", "task_name", "status", "duration_minutes", "cost"]],
+            disp["delete"] = False  # Checkbox column
+
+            # EDITABLE TABLE WITH DELETE CHECKBOX
+            edited = st.data_editor(
+                disp[["task_id", "date", "employee_name", "customer", "task_name", "status", "duration_minutes", "cost", "delete"]],
                 column_config={
                     "task_id": st.column_config.TextColumn("ID", disabled=True),
                     "date": st.column_config.DateColumn("Date", disabled=True),
                     "customer": st.column_config.TextColumn("Customer"),
                     "duration_minutes": st.column_config.NumberColumn("Mins", format="%.1f"),
                     "cost": st.column_config.NumberColumn("Cost", format="$%.2f"),
+                    "delete": st.column_config.CheckboxColumn("Delete?", default=False),
                 },
                 hide_index=True,
-                use_container_width=True
+                use_container_width=True,
+                key="task_log_editor"
             )
+
+            # DELETE BUTTON
+            if st.button("Delete Selected Tasks", type="primary"):
+                to_delete = edited[edited["delete"] == True]["task_id"].tolist()
+                if to_delete:
+                    for tid in to_delete:
+                        if tid == st.session_state.active_task_id:
+                            st.session_state.active_task_id = None
+                        delete_task_from_github(tid)
+                else:
+                    st.info("No tasks selected for deletion.")
 
 # -------------------------------
 # PAGE 3 – ADMIN (WITH ALL FILTERS)
@@ -344,7 +372,6 @@ elif page == "3. Admin":
                     selected_employee = st.selectbox("Employee", ["All"] + sorted(emps["name"].dropna().unique().tolist()))
                     selected_customer = st.selectbox("Customer", ["All"] + sorted(tasks["customer"].dropna().unique().tolist()))
 
-                # Task filter from Tasklist (not tasks.csv)
                 task_options = ["All"] + sorted(tasklist["task_name"].dropna().unique().tolist())
                 selected_task = st.selectbox("Task", task_options)
 
@@ -371,7 +398,7 @@ elif page == "3. Admin":
 
                     st.markdown("---")
 
-                    # TASK CHARTS (only if "All" selected)
+                    # TASK CHARTS
                     if selected_task == "All":
                         task_sum = df.groupby("task_name").agg(
                             hours=("duration_minutes", lambda x: x.sum()/60),
@@ -385,7 +412,7 @@ elif page == "3. Admin":
                             fig = px.pie(task_sum, values="cost", names="task_name", title="Cost by Task")
                             st.plotly_chart(fig, use_container_width=True)
 
-                    # CUSTOMER CHARTS (only if "All" selected)
+                    # CUSTOMER CHARTS
                     if selected_customer == "All" and df["customer"].notna().any():
                         cust_sum = df.groupby("customer").agg(
                             hours=("duration_minutes", lambda x: x.sum()/60),
