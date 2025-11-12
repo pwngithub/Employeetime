@@ -80,7 +80,7 @@ def _github_safe_put(df: pd.DataFrame, file_path: str, key_col: str, msg: str, c
         cfg = _github_cfg()
         token, repo, branch = cfg["token"], cfg["repo"], cfg["branch"]
         headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
-        url = f"https://api.com/repos/{repo}/contents/{file_path}?ref={branch}"
+        url = f"https://api.github.com/repos/{repo}/contents/{file_path}?ref={branch}"
 
         r = requests.get(url, headers=headers)
         payload = {
@@ -263,7 +263,7 @@ elif page == "2. Employee Tasks":
             )
 
 # -------------------------------
-# PAGE 3 – ADMIN (WITH FILTERS + SYNC)
+# PAGE 3 – ADMIN (WITH ALL FILTERS)
 # -------------------------------
 elif page == "3. Admin":
     st.title("Admin")
@@ -278,7 +278,7 @@ elif page == "3. Admin":
                 u = st.text_input("User")
                 p = st.text_input("Password", type="password")
                 if st.form_submit_button("Login"):
-                    if u in admin_users and p == admin_users[u]:
+                    if u in admin_users and p == admin_users[p]:
                         st.session_state.auth = True
                         st.rerun()
                     else:
@@ -299,9 +299,7 @@ elif page == "3. Admin":
                 if st.button("Sync Tasks CSV", type="primary"):
                     df = get_tasks()
                     if _github_safe_put(df, cfg["task_file"], "task_id", "Manual sync tasks", TASK_COLUMNS):
-                        st.success("Synced!")
-                        clear_cache()
-                        st.rerun()
+                        st
 
             with c2:
                 if st.button("Test Employees CSV"):
@@ -325,25 +323,25 @@ elif page == "3. Admin":
                         clear_cache()
                         st.rerun()
 
-            # REPORTS WITH FILTERS
+            # REPORTS WITH 4 FILTERS
             st.markdown("---")
             st.header("Reports")
             tasks = get_tasks()
             emps = get_employees()
+            task_names = get_tasklist()["task_name"].tolist()
 
             if tasks.empty:
                 st.info("No tasks in GitHub.")
             else:
                 # FILTERS
-                col1, col2, col3 = st.columns(3)
+                col1, col2 = st.columns(2)
                 with col1:
                     start_date = st.date_input("Start Date", value=tasks["date"].min().date())
-                with col2:
                     end_date = st.date_input("End Date", value=tasks["date"].max().date())
-                with col3:
+                with col2:
                     selected_employee = st.selectbox("Employee", ["All"] + sorted(emps["name"].unique()))
-                customer_list = ["All"] + sorted(tasks["customer"].dropna().unique())
-                selected_customer = st.selectbox("Customer", customer_list)
+                    selected_customer = st.selectbox("Customer", ["All"] + sorted(tasks["customer"].dropna().unique()))
+                selected_task = st.selectbox("Task", ["All"] + sorted(task_names))
 
                 # APPLY FILTERS
                 df = tasks.copy()
@@ -352,6 +350,8 @@ elif page == "3. Admin":
                     df = df[df["employee_name"] == selected_employee]
                 if selected_customer != "All":
                     df = df[df["customer"] == selected_customer]
+                if selected_task != "All":
+                    df = df[df["task_name"] == selected_task]
 
                 if df.empty:
                     st.info("No data for selected filters.")
@@ -366,20 +366,21 @@ elif page == "3. Admin":
 
                     st.markdown("---")
 
-                    # TASK CHARTS
-                    task_sum = df.groupby("task_name").agg(
-                        hours=("duration_minutes", lambda x: x.sum()/60),
-                        cost=("cost", "sum")
-                    ).reset_index()
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        fig = px.bar(task_sum, x="task_name", y="hours", title="Hours by Task")
-                        st.plotly_chart(fig, use_container_width=True)
-                    with col2:
-                        fig = px.pie(task_sum, values="cost", names="task_name", title="Cost by Task")
-                        st.plotly_chart(fig, use_container_width=True)
+                    # TASK CHARTS (if not filtered by task)
+                    if selected_task == "All":
+                        task_sum = df.groupby("task_name").agg(
+                            hours=("duration_minutes", lambda x: x.sum()/60),
+                            cost=("cost", "sum")
+                        ).reset_index()
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            fig = px.bar(task_sum, x="task_name", y="hours", title="Hours by Task")
+                            st.plotly_chart(fig, use_container_width=True)
+                        with col2:
+                            fig = px.pie(task_sum, values="cost", names="task_name", title="Cost by Task")
+                            st.plotly_chart(fig, use_container_width=True)
 
-                    # CUSTOMER CHARTS (if applicable)
+                    # CUSTOMER CHARTS (if not filtered by customer)
                     if selected_customer == "All" and df["customer"].notna().any():
                         cust_sum = df.groupby("customer").agg(
                             hours=("duration_minutes", lambda x: x.sum()/60),
