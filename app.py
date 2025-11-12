@@ -347,7 +347,7 @@ elif page == "2. Employee Tasks":
                     clear_cache()
                     st.rerun()
 
-        # TASK LOG
+                # TASK LOG
         st.subheader("Task Log")
         if tasks.empty:
             st.info("No tasks yet.")
@@ -359,7 +359,7 @@ elif page == "2. Employee Tasks":
             disp["delete"] = False
             disp["date"] = pd.to_datetime(disp["date"], errors="coerce").dt.date
 
-            # Stop function
+            # Stop function (unchanged)
             def stop_task(tid):
                 tasks = get_tasks()
                 row = tasks[tasks["task_id"] == tid].iloc[0]
@@ -377,13 +377,15 @@ elif page == "2. Employee Tasks":
                 clear_cache()
                 st.rerun()
 
+            # === UPDATED: INCLUDE CUSTOMER COLUMN ===
             edited = st.data_editor(
-                disp[["task_id", "date", "employee_name", "task_name", "status", "duration_minutes", "cost", "delete"]],
+                disp[["task_id", "date", "employee_name", "customer", "task_name", "status", "duration_minutes", "cost", "delete"]],
                 column_config={
                     "delete": st.column_config.CheckboxColumn("Delete?", default=False),
                     "task_id": st.column_config.TextColumn("ID", disabled=True),
                     "date": st.column_config.DateColumn("Date", disabled=True),
                     "employee_name": st.column_config.TextColumn("Employee"),
+                    "customer": st.column_config.TextColumn("Customer"),  # NEW
                     "task_name": st.column_config.TextColumn("Task"),
                     "status": st.column_config.TextColumn("Status"),
                     "duration_minutes": st.column_config.NumberColumn("Mins", format="%.1f"),
