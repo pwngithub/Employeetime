@@ -2,23 +2,3 @@ task_type_id,task_name,category
 TT_SALES_1,Sales – First Contact Reply,Sales
 TT_SALES_2,Sales – Schedule Site Survey,Sales
 TT_OPS_1,Construction – Pull Fiber,Construction
-TT_1762795325,Support - Customer call,Support
-TT_1762795398,Support - Technician work,Support
-TT_1762795419,Support - Walk in,Support
-TT_1762795438,Support - Working tickets,Support
-TT_bc0ac974,Sales - Prep schedule,Sales
-TT_3df0faf5,Sales - Circuit building,Sales
-TT_67d60bfa,Sales - Disconnection,Sales
-TT_6f62f8fb,Sales - Creating - Updating customer account,Sales
-TT_df793d30,Sales - Installation Scheduling,Sales
-TT_698157cd,Sales - Reconnect (NPD or seasonal),Sales
-TT_0d025c96,Closing Procedure,Support
-TT_c32b5233,Sales - OTT orders - emails,Sales
-TT_50cc21fd,Sales - DBU Order,Sales
-TT_d9f10429,Sales - Schedule Site Prep,Sales
-TT_e550f620,Sales - Phone call,Sales
-TT_fee747e7,Sales - Scheduling techs for training/blocking off-updating schedule,Sales
-TT_a3b0c4bd,Phone Call/Email,Billing back up
-TT_7aa52f23,1 Week Follow Up,Sales
-TT_7305c32d,1 Week Follow up Seasonal Suspend,Sales
-TT_42afbf6b,1 Week Follow Up - Cancelled Service,Sales
